@@ -164,7 +164,7 @@ static BOOL cs2::initialize(void)
 	game_handle = vm::open_process_ex(get_process_name(), get_client_name());
 	if (!game_handle)
 	{
-		LOG("CS2 process not found - unable to open process\n");
+		LOG("CS2 detected, but opening the process or locating client.dll/libclient.so failed\n");
 		return 0;
 	}
 
