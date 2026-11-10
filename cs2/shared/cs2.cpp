@@ -1196,7 +1196,11 @@ static QWORD cs2::get_interface(QWORD base, PCSTR name)
 		export_address += 0x10;
 	}
 	
-	QWORD interface_entry = vm::read_i64(game_handle, (export_address + 7) + vm::read_i32(game_handle, export_address + 3));
+	QWORD registry_address = vm::get_relative_address(game_handle, export_address, 3, 7);
+	if (!registry_address) {
+		LOG("interface [%s]: invalid registry displacement or read failure\n", name); return 0;
+	}
+	QWORD interface_entry = vm::read_i64(game_handle, registry_address);
 	if (interface_entry == 0)
 	{
 		return 0;
@@ -1233,7 +1237,8 @@ static QWORD cs2::get_interface(QWORD base, PCSTR name)
 			//
 			// emulate vfunc call
 			//
-			QWORD addr = (vfunc + 7) + vm::read_i32(game_handle, vfunc + 3);
+			QWORD addr = vm::get_relative_address(game_handle, vfunc, 3, 7);
+			if (!addr) LOG("interface [%s]: invalid factory displacement or read failure\n", name);
 			return addr;
 		}
 

@@ -13,6 +13,8 @@ BOOL vm::read(vm_handle, QWORD address, PVOID out, QWORD size)
     return 1;
 }
 void vm::close(vm_handle) { ++closes; }
+VmOs vm::get_target_os() { return VmOs::Windows; }
+QWORD vm::get_module_export(vm_handle, QWORD, PCSTR) { return 9000; }
 template<typename T> void put(QWORD address, T value)
 {
     memcpy(memory + address, &value, sizeof(value));
@@ -21,6 +23,21 @@ int main()
 {
     cs2::game_handle = reinterpret_cast<vm_handle>(1);
     assert(cs2::get_interface_function(0, 16) == 0);
+    put<INT32>(1003, 100);
+    assert(vm::get_relative_address(cs2::game_handle, 1000, 3, 7) == 1107);
+    put<INT32>(1003, -100);
+    assert(vm::get_relative_address(cs2::game_handle, 1000, 3, 7) == 907);
+    put<INT32>(1003, (-2147483647 - 1));
+    assert(!vm::get_relative_address(cs2::game_handle, 1000, 3, 7));
+    assert(!vm::get_relative_address(cs2::game_handle, sizeof(memory), 3, 7));
+    assert(!vm::get_relative_address(cs2::game_handle, ~QWORD(0) - 1, 3, 7));
+
+    // Both registry and factory references point backwards in this fixture.
+    put<INT32>(9003, -1007); put<QWORD>(8000, 8200);
+    put<QWORD>(8200, 8400); put<QWORD>(8208, 8300);
+    strcpy((char*)memory + 8300, "VEngineCvar007");
+    put<INT32>(8403, -1407);
+    assert(cs2::get_interface(123, "VEngineCvar0") == 7000);
     put<QWORD>(64, 128);
     put<QWORD>(128 + 16 * 8, 512);
     assert(cs2::get_interface_function(64, 16) == 512);

@@ -23,3 +23,15 @@ Rebuild the updated main branch and collect the line beginning `convar
 
 Regression tests cover a null first entry, a matching later entry, a short name
 ending at the final readable byte, full-name matching and read failures.
+
+## Signed relative address correction
+
+The interface registry/factory paths previously added a DWORD displacement to
+64-bit addresses without sign extension. Negative displacements therefore
+pointed 4 GiB too high. Both now use the shared checked signed-relative resolver,
+which also rejects failed reads and arithmetic overflow/underflow. Synthetic
+regression coverage exercises backward registry and factory references together.
+
+This confirms a code defect; it does not prove it produced a specific user's
+invalid table count. The convar metadata positions remain unverified for that
+user's binary version. A UM cross-build and the local safety suite passed.

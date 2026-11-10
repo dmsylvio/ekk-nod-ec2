@@ -279,8 +279,17 @@ inline BOOL vm::write_float(vm_handle process, QWORD address, float value)
 
 inline QWORD vm::get_relative_address(vm_handle process, QWORD instruction, DWORD offset, DWORD instruction_size)
 {
-	INT32 rip_address = read_i32(process, instruction + offset);
-	return (QWORD)(instruction + instruction_size + rip_address);
+	if (!instruction || instruction > ~(QWORD)0 - offset ||
+	    instruction > ~(QWORD)0 - instruction_size) return 0;
+	INT32 displacement = 0;
+	if (!read(process, instruction + offset, &displacement, sizeof(displacement))) return 0;
+	QWORD next = instruction + instruction_size;
+	if (displacement >= 0) {
+		QWORD distance = (QWORD)displacement;
+		return distance <= ~(QWORD)0 - next ? next + distance : 0;
+	}
+	QWORD distance = (QWORD)(-(long long)displacement);
+	return distance <= next ? next - distance : 0;
 }
 
 #endif /* VM_H */
