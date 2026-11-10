@@ -131,7 +131,7 @@ inline int get_viewangles_off() { return vm::get_target_os() == VmOs::Windows ? 
 #define JZ(val,field) \
 if ((val) == 0)  \
 { \
-LOG(__FILE__ ": line %d\n", __LINE__); \
+LOG(__FILE__ ": line %d: initialization failed: %s\n", __LINE__, #val); \
 goto field; \
 } \
 
@@ -213,7 +213,10 @@ static BOOL cs2::initialize(void)
 		    !vm::read(game_handle, function + get_button_off(),
 		              &direct::button_state, sizeof(direct::button_state)) ||
 		    !direct::button_state || interfaces::input > ~(QWORD)0 - direct::button_state)
+		{
+			LOG("CS2 input initialization failed: function lookup, displacement read, or address validation.\n");
 			goto E1;
+		}
 	}
 
 	if (vm::get_target_os() == VmOs::Linux)
@@ -266,7 +269,11 @@ static BOOL cs2::initialize(void)
 		}
 	}
 
-	JZ(direct::view_matrix, E1);
+	if (!direct::view_matrix)
+	{
+		LOG("CS2 view-matrix discovery failed after the available lookup strategies. A zero result does not distinguish dump/read failure from no pattern match.\n");
+		goto E1;
+	}
 
 	JZ(convars::sensitivity              = engine::get_convar("sensitivity"), E1);
 	JZ(convars::mp_teammates_are_enemies = engine::get_convar("mp_teammates_are_enemies"), E1);
