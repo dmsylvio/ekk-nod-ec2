@@ -151,6 +151,8 @@ namespace vmlinux
 
 	inline void free_module(PVOID dumped_module)
 	{
+		if (!dumped_module)
+			return;
 		QWORD a0 = (QWORD)dumped_module;
 
 		a0 -= 16;
@@ -163,9 +165,13 @@ namespace vmlinux
 
 	inline QWORD scan_pattern(PVOID dumped_module, PCSTR pattern, PCSTR mask, QWORD length)
 	{
+		if (!dumped_module || !pattern || !mask || !length)
+			return 0;
 		QWORD base    = *(QWORD*)((QWORD)dumped_module - 16);
 		QWORD size    = *(QWORD*)((QWORD)dumped_module - 8);
-		QWORD address = utils::FindPatternEx((QWORD)dumped_module, size - length, (BYTE*)pattern, (char*)mask);
+		if (length > size || strlen_imp(mask) != length)
+			return 0;
+		QWORD address = utils::FindPatternEx((QWORD)dumped_module, size, (BYTE*)pattern, (char*)mask);
 		if (address)
 		{
 			return (address - (QWORD)dumped_module) + base;

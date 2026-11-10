@@ -115,9 +115,16 @@ namespace utils
 	inline QWORD FindPatternEx(QWORD dwAddress, QWORD dwLen, BYTE* bPattern, char* szMask)
 	{
 
-		if (dwLen <= 0)
+		// dwLen is the complete readable region, not the number of candidates.
+		if (!dwAddress || !dwLen || !bPattern || !szMask ||
+		    dwLen > ~(QWORD)0 - dwAddress)
 			return 0;
-		for (QWORD i = 0; i < dwLen; i++)
+		QWORD pattern_length = 0;
+		while (pattern_length < dwLen && szMask[pattern_length])
+			++pattern_length;
+		if (!pattern_length || szMask[pattern_length])
+			return 0;
+		for (QWORD i = 0; i <= dwLen - pattern_length; i++)
 			if (bDataCompare((BYTE*)(dwAddress + i), bPattern, szMask))
 				return (QWORD)(dwAddress + i);
 

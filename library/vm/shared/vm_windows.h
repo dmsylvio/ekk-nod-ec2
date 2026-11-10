@@ -124,8 +124,9 @@ namespace vmwin
 				continue;
 			}
 
-			vm::read(process, base + a0, &a2, name_length + 1);
-			a2[name_length + 1] = 0;
+			if (!vm::read(process, base + a0, &a2, name_length + 1))
+				return 0;
+			a2[name_length] = 0;
 
 			if (!strcmpi_imp(a2, export_name))
 			{
@@ -217,6 +218,8 @@ namespace vmwin
 
 	inline void free_module(PVOID dumped_module)
 	{
+		if (!dumped_module)
+			return;
 		QWORD a0 = (QWORD)dumped_module;
 
 		a0 -= 16;
@@ -273,7 +276,7 @@ namespace vmwin
 	{
 		QWORD ret = 0;
 
-		if (dumped_module == 0)
+		if (!dumped_module || !pattern || !mask || !length || strlen_imp(mask) != length)
 			return 0;
 
 		QWORD dos_header = (QWORD)dumped_module;
@@ -293,7 +296,7 @@ namespace vmwin
 			{
 				QWORD section_address = dos_header + (QWORD) * (DWORD*)(section + 0x0C);
 				DWORD section_size = *(DWORD*)(section + 0x08);
-				QWORD address = utils::FindPatternEx(section_address, section_size - length, (BYTE*)pattern, (char*)mask);
+				QWORD address = utils::FindPatternEx(section_address, section_size, (BYTE*)pattern, (char*)mask);
 				if (address)
 				{
 					ret = (address - (QWORD)dumped_module) +
