@@ -2,11 +2,12 @@
 // vmwin
 //
 #include "../shared/vm_windows.h"
+#include "../shared/windows_process_names.h"
 
-#include <TlHelp32.h>
+#include <tlhelp32.h>
 #pragma comment(lib, "ntdll.lib")
 
-extern "C" __kernel_entry NTSTATUS NtQueryInformationProcess(
+extern "C" NTSTATUS NTAPI NtQueryInformationProcess(
 	HANDLE           ProcessHandle,
 	ULONG            ProcessInformationClass,
 	PVOID            ProcessInformation,
@@ -25,14 +26,14 @@ BOOL vm::process_exists(PCSTR process_name)
 		return 0;
 	BOOL found = 0;
 
-	PROCESSENTRY32A entry{};
-	entry.dwSize = sizeof(PROCESSENTRY32A);
+	PROCESSENTRY32W entry{};
+	entry.dwSize = sizeof(PROCESSENTRY32W);
 
 	HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
 
 	if (snapshot == INVALID_HANDLE_VALUE)
 		return 0;
-	if (!Process32FirstA(snapshot, &entry))
+	if (!Process32FirstW(snapshot, &entry))
 	{
 		CloseHandle(snapshot);
 		return 0;
@@ -40,12 +41,12 @@ BOOL vm::process_exists(PCSTR process_name)
 
 	do
 	{
-		if (!strcmpi_imp(entry.szExeFile, process_name))
+		if (process_name_matches(entry.szExeFile, process_name))
 		{
 			found = 1;
 			break;
 		}
-	} while (Process32NextA(snapshot, &entry));
+	} while (Process32NextW(snapshot, &entry));
 
 	CloseHandle(snapshot);
 
@@ -58,14 +59,14 @@ vm_handle vm::open_process(PCSTR process_name)
 		return 0;
 	vm_handle process_handle = 0;
 
-	PROCESSENTRY32A entry{};
-	entry.dwSize = sizeof(PROCESSENTRY32A);
+	PROCESSENTRY32W entry{};
+	entry.dwSize = sizeof(PROCESSENTRY32W);
 
 	HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
 
 	if (snapshot == INVALID_HANDLE_VALUE)
 		return 0;
-	if (!Process32FirstA(snapshot, &entry))
+	if (!Process32FirstW(snapshot, &entry))
 	{
 		CloseHandle(snapshot);
 		return 0;
@@ -73,12 +74,12 @@ vm_handle vm::open_process(PCSTR process_name)
 
 	do
 	{
-		if (!strcmpi_imp(entry.szExeFile, process_name))
+		if (process_name_matches(entry.szExeFile, process_name))
 		{
 			process_handle = OpenProcess(PROCESS_ALL_ACCESS, 0, entry.th32ProcessID);
 			break;
 		}
-	} while (Process32NextA(snapshot, &entry));
+	} while (Process32NextW(snapshot, &entry));
 
 	CloseHandle(snapshot);
 
@@ -91,14 +92,14 @@ vm_handle vm::open_process_ex(PCSTR process_name, PCSTR dll_name)
 		return 0;
 	vm_handle process_handle = 0;
 
-	PROCESSENTRY32A entry{};
-	entry.dwSize = sizeof(PROCESSENTRY32A);
+	PROCESSENTRY32W entry{};
+	entry.dwSize = sizeof(PROCESSENTRY32W);
 
 	HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
 
 	if (snapshot == INVALID_HANDLE_VALUE)
 		return 0;
-	if (!Process32FirstA(snapshot, &entry))
+	if (!Process32FirstW(snapshot, &entry))
 	{
 		CloseHandle(snapshot);
 		return 0;
@@ -106,7 +107,7 @@ vm_handle vm::open_process_ex(PCSTR process_name, PCSTR dll_name)
 
 	do
 	{
-		if (!strcmpi_imp(entry.szExeFile, process_name))
+		if (process_name_matches(entry.szExeFile, process_name))
 		{
 			process_handle = OpenProcess(PROCESS_ALL_ACCESS, 0, entry.th32ProcessID);
 
@@ -123,7 +124,7 @@ vm_handle vm::open_process_ex(PCSTR process_name, PCSTR dll_name)
 			CloseHandle(process_handle);
 			process_handle = 0;
 		}
-	} while (Process32NextA(snapshot, &entry));
+	} while (Process32NextW(snapshot, &entry));
 
 	CloseHandle(snapshot);
 
@@ -136,14 +137,14 @@ vm_handle vm::open_process_by_module_name(PCSTR dll_name)
 		return 0;
 	vm_handle process_handle = 0;
 
-	PROCESSENTRY32A entry{};
-	entry.dwSize = sizeof(PROCESSENTRY32A);
+	PROCESSENTRY32W entry{};
+	entry.dwSize = sizeof(PROCESSENTRY32W);
 
 	HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
 
 	if (snapshot == INVALID_HANDLE_VALUE)
 		return 0;
-	if (!Process32FirstA(snapshot, &entry))
+	if (!Process32FirstW(snapshot, &entry))
 	{
 		CloseHandle(snapshot);
 		return 0;
@@ -165,7 +166,7 @@ vm_handle vm::open_process_by_module_name(PCSTR dll_name)
 
 		CloseHandle(process_handle);
 		process_handle = 0;
-	} while (Process32NextA(snapshot, &entry));
+	} while (Process32NextW(snapshot, &entry));
 
 	CloseHandle(snapshot);
 

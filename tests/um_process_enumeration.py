@@ -14,12 +14,13 @@ preamble = r'''
 #include <cstring>
 #include <strings.h>
 #include <cstdint>
+#include <cwchar>
 using BOOL = int;
 using DWORD = unsigned;
 using HANDLE = void*;
 using vm_handle = void*;
 using PCSTR = const char*;
-struct PROCESSENTRY32A { DWORD dwSize; char szExeFile[260]; DWORD th32ProcessID; };
+struct PROCESSENTRY32W { DWORD dwSize; wchar_t szExeFile[260]; DWORD th32ProcessID; };
 #define INVALID_HANDLE_VALUE ((HANDLE)(intptr_t)-1)
 #define TH32CS_SNAPPROCESS 2
 #define PROCESS_ALL_ACCESS 0xffff
@@ -29,20 +30,36 @@ HANDLE CreateToolhelp32Snapshot(DWORD, DWORD) {
     position = 0;
     return snapshot_ok ? (HANDLE)1 : INVALID_HANDLE_VALUE;
 }
-BOOL Process32FirstA(HANDLE, PROCESSENTRY32A* e) {
+BOOL Process32FirstW(HANDLE, PROCESSENTRY32W* e) {
     if (!first_ok || !count) return 0;
-    strcpy(e->szExeFile, "cs2.exe"); e->th32ProcessID = 10;
+    wcscpy(e->szExeFile, L"cs2.exe"); e->th32ProcessID = 10;
     return 1;
 }
-BOOL Process32NextA(HANDLE, PROCESSENTRY32A* e) {
+BOOL Process32NextW(HANDLE, PROCESSENTRY32W* e) {
     ++next_calls;
     if (++position >= count) return 0;
-    strcpy(e->szExeFile, "other.exe"); e->th32ProcessID = 11;
+    wcscpy(e->szExeFile, L"other.exe"); e->th32ProcessID = 11;
     return 1;
 }
 BOOL CloseHandle(HANDLE h) { assert(h && h != INVALID_HANDLE_VALUE); ++closes; return 1; }
 HANDLE OpenProcess(DWORD, BOOL, DWORD id) { return access_ok ? (HANDLE)(uintptr_t)id : nullptr; }
 int strcmpi_imp(PCSTR a, PCSTR b) { return strcasecmp(a, b); }
+using WCHAR = wchar_t;
+#define MAX_PATH 260
+#define CP_UTF8 65001
+#define MB_ERR_INVALID_CHARS 8
+#define TRUE 1
+#define CSTR_EQUAL 2
+int MultiByteToWideChar(unsigned, DWORD, PCSTR input, int, WCHAR* out, int capacity) {
+    size_t size = strlen(input) + 1;
+    if (size > (size_t)capacity) return 0;
+    for (size_t i=0; i<size; ++i) out[i]=(unsigned char)input[i];
+    return (int)size;
+}
+int CompareStringOrdinal(const WCHAR* a, int, const WCHAR* b, int, BOOL) {
+    return wcscasecmp(a,b)==0 ? CSTR_EQUAL : 1;
+}
+#include "library/vm/shared/windows_process_names.h"
 namespace vm {
 BOOL process_exists(PCSTR);
 vm_handle open_process(PCSTR);
@@ -88,6 +105,6 @@ with tempfile.TemporaryDirectory(prefix='ekk-um-') as directory:
     binary = Path(directory) / 'enumeration'
     unit.write_text(preamble + bodies + tests)
     subprocess.run(['g++', '-std=c++11', '-g', '-O1', '-fsanitize=address,undefined',
-                    str(unit), '-o', str(binary)], check=True)
+                    '-I', str(root), str(unit), '-o', str(binary)], check=True)
     subprocess.run([str(binary)], check=True)
 print('UM process enumeration regression checks passed.')
