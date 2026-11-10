@@ -739,34 +739,52 @@ BOOL cs2::sdl::get_mouse_button(QWORD mouse)
 
 QWORD cs2::engine::get_convar(const char *name)
 {
-	if (!game_handle || !interfaces::cvar || !name)
-		return 0;
-	QWORD name_length = 0;
-	while (name_length < 120 && name[name_length])
-		++name_length;
-	if (!name_length || name_length >= 120 || interfaces::cvar > ~(QWORD)0 - 160)
-		return 0;
-	QWORD objs = 0;
-	DWORD count = 0;
-	// Defensive work budget, not a claim about the game's current layout.
-	const DWORD max_convars = 65536;
-	if (!vm::read(game_handle, interfaces::cvar + 64, &objs, sizeof(objs)) || !objs ||
-	    !vm::read(game_handle, interfaces::cvar + 160, &count, sizeof(count)) ||
-	    count > max_convars || objs > ~(QWORD)0 - QWORD(count) * 16)
-		return 0;
-	for (DWORD i = 0; i < count; ++i)
-	{
-		QWORD entry = 0, source = 0;
-		char convar_name[120]{};
-		if (!vm::read(game_handle, objs + QWORD(i) * 16, &entry, sizeof(entry)) || !entry)
-			return 0;
-		if (!vm::read(game_handle, entry, &source, sizeof(source)) || !source ||
-		    !vm::read(game_handle, source, convar_name, name_length + 1))
-			return 0;
-		if (convar_name[name_length]) continue;
-		if (!strcmpi_imp(convar_name, name))
-			return entry;
+	if (!game_handle || !interfaces::cvar || !name) {
+		LOG("convar lookup: missing session, interface, or name\n"); return 0;
 	}
+	QWORD name_length = 0;
+	while (name_length < 120 && name[name_length]) ++name_length;
+	if (!name_length || name_length >= 120 || interfaces::cvar > ~(QWORD)0 - 160) {
+		LOG("convar lookup: invalid name length or interface address\n"); return 0;
+	}
+	QWORD objs = 0; DWORD count = 0;
+	const DWORD max_convars = 65536;
+	if (!vm::read(game_handle, interfaces::cvar + 64, &objs, sizeof(objs))) {
+		LOG("convar [%s]: table pointer read failed\n", name); return 0;
+	}
+	if (!vm::read(game_handle, interfaces::cvar + 160, &count, sizeof(count))) {
+		LOG("convar [%s]: count read failed\n", name); return 0;
+	}
+	if (!objs || count > max_convars || objs > ~(QWORD)0 - QWORD(count) * 16) {
+		LOG("convar [%s]: invalid table metadata (count=%u, table_present=%d)\n", name, (unsigned)count, objs != 0); return 0;
+	}
+	DWORD empty = 0;
+	for (DWORD i = 0; i < count; ++i) {
+		QWORD entry = 0, source = 0;
+		if (!vm::read(game_handle, objs + QWORD(i) * 16, &entry, sizeof(entry))) {
+			LOG("convar [%s]: entry read failed at index %u\n", name, (unsigned)i); return 0;
+		}
+		if (!entry) { ++empty; continue; }
+		if (!vm::read(game_handle, entry, &source, sizeof(source))) {
+			LOG("convar [%s]: name pointer read failed at index %u\n", name, (unsigned)i); return 0;
+		}
+		if (!source) { ++empty; continue; }
+		if (source > ~(QWORD)0 - name_length) {
+			LOG("convar [%s]: name address overflow at index %u\n", name, (unsigned)i); return 0;
+		}
+		// Stop at the first mismatch or terminator; do not read past short names.
+		bool matches = true;
+		for (QWORD n = 0; n <= name_length; ++n) {
+			BYTE ch = 0;
+			if (!vm::read(game_handle, source + n, &ch, sizeof(ch))) {
+				LOG("convar [%s]: name read failed at index %u, byte %u\n", name, (unsigned)i, (unsigned)n); return 0;
+			}
+			if (to_lower_imp(ch) != to_lower_imp((BYTE)name[n])) { matches = false; break; }
+			if (!ch) break;
+		}
+		if (matches) return entry;
+	}
+	LOG("convar [%s]: not found (count=%u, empty=%u); table layout compatibility is not verified\n", name, (unsigned)count, (unsigned)empty);
 	return 0;
 }
 

@@ -64,6 +64,14 @@ int main()
     memset(oversized, 'a', 120); oversized[120] = 0;
     assert(cs2::engine::get_convar(oversized) == 0);
     assert(cs2::engine::get_convar(nullptr) == 0);
+    // Empty slots must not prevent a later matching convar from being found.
+    put<DWORD>(3160, 2); put<QWORD>(4000, 0); put<QWORD>(4016, 5000);
+    assert(cs2::engine::get_convar(longest) == 5000);
+    // A shorter preceding name may end at the last readable byte.
+    put<QWORD>(4000, 5100); put<QWORD>(5100, sizeof(memory) - 2);
+    memory[sizeof(memory) - 2] = 'a'; memory[sizeof(memory) - 1] = 0;
+    assert(cs2::engine::get_convar(longest) == 5000);
+    put<DWORD>(3160, 1); put<QWORD>(4000, 5000);
     memory[6000 + 119] = 'b';
     assert(cs2::engine::get_convar(longest) == 0);
     put<QWORD>(5000, sizeof(memory));
