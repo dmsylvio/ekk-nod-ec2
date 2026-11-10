@@ -91,129 +91,97 @@ namespace vmwin
 		return 0;
 	}
 
-	QWORD get_module_export(vm_handle process, QWORD base, PCSTR export_name)
+	// Resource ceiling for untrusted image metadata (512 MiB).
+	static const QWORD max_image_size = 512ULL * 1024 * 1024;
+	inline bool fits(QWORD size, QWORD offset, QWORD count)
 	{
-		QWORD a0;
-		DWORD a1[4]{};
-		char  a2[120]{};
-
-		a0 = base + vm::read_i16(process, base + 0x3C);
-		if (a0 == base)
-		{
-			return 0;
-		}
-
-		DWORD wow64_off = vm::read_i16(process, a0 + 0x4) == 0x8664 ? 0x88 : 0x78;
-
-		a0 = base + (QWORD)vm::read_i32(process, a0 + wow64_off);
-		if (a0 == base)
-		{
-			return 0;
-		}
-
-		int name_length = (int)strlen_imp(export_name);
-		if (name_length > 119)
-			name_length = 119;
-
-		vm::read(process, a0 + 0x18, &a1, sizeof(a1));
-		while (a1[0]--)
-		{
-			a0 = (QWORD)vm::read_i32(process, base + a1[2] + ((QWORD)a1[0] * 4));
-			if (a0 == 0)
-			{
-				continue;
-			}
-
-			if (!vm::read(process, base + a0, &a2, name_length + 1))
-				return 0;
-			a2[name_length] = 0;
-
-			if (!strcmpi_imp(a2, export_name))
-			{
-				a0 = vm::read_i16(process, base + a1[3] + ((QWORD)a1[0] * 2)) * 4;
-				a0 = vm::read_i32(process, base + a1[1] + a0);
-				return (base + a0);
-			}
-		}
-		return 0;
+		return offset <= size && count <= size - offset;
 	}
-
+	template<class T> inline bool local_read(const BYTE* data, QWORD size, QWORD at, T& out)
+	{
+		if (!fits(size, at, sizeof(T))) return false;
+		memcpy(&out, data + at, sizeof(T));
+		return true;
+	}
+	struct pe_info { DWORD nt, image_size, headers_size; WORD sections, optional_size, magic; QWORD table; };
+	inline bool parse_pe(const BYTE* data, QWORD size, pe_info& info)
+	{
+		WORD mz = 0; DWORD signature = 0;
+		if (!local_read(data, size, 0, mz) || mz != 0x5A4D ||
+		    !local_read(data, size, 0x3C, info.nt) ||
+		    !local_read(data, size, info.nt, signature) || signature != 0x4550 ||
+		    !local_read(data, size, QWORD(info.nt) + 6, info.sections) ||
+		    !local_read(data, size, QWORD(info.nt) + 20, info.optional_size) ||
+		    !local_read(data, size, QWORD(info.nt) + 24, info.magic)) return false;
+		if ((info.magic != 0x10B && info.magic != 0x20B) ||
+		    info.optional_size < (info.magic == 0x20B ? 240 : 224) ||
+		    !info.sections || info.sections > 96 ||
+		    !local_read(data, size, QWORD(info.nt) + 0x50, info.image_size) ||
+		    !local_read(data, size, QWORD(info.nt) + 0x54, info.headers_size)) return false;
+		info.table = QWORD(info.nt) + 24 + info.optional_size;
+		return info.image_size && info.image_size <= max_image_size &&
+		       info.headers_size <= info.image_size &&
+		       fits(info.headers_size, info.table, QWORD(info.sections) * 40) &&
+		       fits(size, info.table, QWORD(info.sections) * 40);
+	}
+	inline void release_image(BYTE* allocation)
+	{
+	#ifdef _KERNEL_MODE
+		ExFreePoolWithTag(allocation, 'ofnI');
+	#else
+		free(allocation);
+	#endif
+	}
 	inline PVOID dump_module(vm_handle process, QWORD base, VM_MODULE_TYPE module_type)
 	{
-		if (base == 0)
-		{
-			return 0;
-		}
-
-		QWORD nt_header = (QWORD)vm::read_i32(process, base + 0x03C) + base;
-		if (nt_header == base)
-		{
-			return 0;
-		}
-
-		DWORD image_size = vm::read_i32(process, nt_header + 0x050);
-		if (image_size == 0)
-		{
-			return 0;
-		}
-
+		// Read a bounded header prefix, then the complete declared headers.
+		BYTE dos[64]{}; DWORD nt = 0;
+		if (!base || base > ~(QWORD)0 - max_image_size ||
+		    !vm::read(process, base, dos, sizeof(dos))) return 0;
+		memcpy(&nt, dos + 0x3C, sizeof(nt));
+		if (dos[0] != 'M' || dos[1] != 'Z' || nt < 64 || nt > 1024 * 1024) return 0;
+		BYTE prefix[88]{};
+		if (!vm::read(process, base + nt, prefix, sizeof(prefix))) return 0;
+		DWORD image_size = 0, headers_size = 0;
+		memcpy(&image_size, prefix + 0x50, 4);
+		memcpy(&headers_size, prefix + 0x54, 4);
+		if (!image_size || image_size > max_image_size || headers_size > image_size ||
+		    headers_size < QWORD(nt) + sizeof(prefix) || headers_size > 1024 * 1024) return 0;
 	#ifdef _KERNEL_MODE
-		BYTE *ret = (BYTE*)ExAllocatePoolWithTag(NonPagedPoolNx, (QWORD)(image_size + 16), 'ofnI');
+		BYTE* allocation = (BYTE*)ExAllocatePoolWithTag(NonPagedPoolNx, QWORD(image_size) + 16, 'ofnI');
 	#else
-		BYTE *ret = (BYTE*)malloc((QWORD)image_size + 16);
+		BYTE* allocation = (BYTE*)malloc(QWORD(image_size) + 16);
 	#endif
-		if (ret == 0)
-			return 0;
-
-		*(QWORD*)(ret + 0) = base;
-		*(QWORD*)(ret + 8) = image_size;
-		ret += 16;
-
-		DWORD headers_size = vm::read_i32(process, nt_header + 0x54);
-		vm::read(process, base, ret, headers_size);
-
-		WORD machine = vm::read_i16(process, nt_header + 0x4);
-		QWORD section_header = machine == 0x8664 ?
-			nt_header + 0x0108 :
-			nt_header + 0x00F8;
-
-
-		for (WORD i = 0; i < vm::read_i16(process, nt_header + 0x06); i++) {
-			QWORD section = section_header + ((QWORD)i * 40);
-			if (module_type == VM_MODULE_TYPE::CodeSectionsOnly)
-			{
-				DWORD section_characteristics = vm::read_i32(process, section + 0x24);
-				if (!(section_characteristics & 0x00000020))
-					continue;
-			}
-
-			else if (module_type == VM_MODULE_TYPE::ReadOnly)
-			{
-				DWORD section_characteristics = vm::read_i32(process, section + 0x24);
-				if (!(section_characteristics & 0x40000000)) // IMAGE_SCN_MEM_READ
-				{
-					continue;
-				}
-				if ((section_characteristics & 0x80000000)) // IMAGE_SCN_MEM_WRITE
-				{
-					continue;
-				}
-				if ((section_characteristics & 0x20000000)) // IMAGE_SCN_MEM_EXECUTE
-				{
-					continue;
-				}
-				if ((section_characteristics & 0x02000000)) // IMAGE_SCN_MEM_DISCARDABLE
-				{
-					continue;
-				}
-			}
-
-			QWORD target_address = (QWORD)ret + (QWORD)vm::read_i32(process, section + ((module_type == VM_MODULE_TYPE::Raw) ? 0x14 : 0x0C));
-			QWORD virtual_address = base + (QWORD)vm::read_i32(process, section + 0x0C);
-			DWORD virtual_size = vm::read_i32(process, section + 0x08);
-			vm::read(process, virtual_address, (PVOID)target_address, virtual_size);
+		if (!allocation) return 0;
+		BYTE* data = allocation + 16;
+		memset(data, 0, image_size);
+		pe_info info{};
+		if (!vm::read(process, base, data, headers_size) ||
+		    !parse_pe(data, headers_size, info) || info.image_size != image_size ||
+		    info.headers_size != headers_size) { release_image(allocation); return 0; }
+		for (WORD i = 0; i < info.sections; ++i)
+		{
+			QWORD section = info.table + QWORD(i) * 40;
+			DWORD flags = 0, rva = 0, bytes = 0, raw = 0, raw_size = 0;
+			local_read(data, headers_size, section + 36, flags);
+			local_read(data, headers_size, section + 12, rva);
+			local_read(data, headers_size, section + 8, bytes);
+			local_read(data, headers_size, section + 20, raw);
+			local_read(data, headers_size, section + 16, raw_size);
+			if (module_type == VM_MODULE_TYPE::CodeSectionsOnly && !(flags & 0x20)) continue;
+			if (module_type == VM_MODULE_TYPE::ReadOnly &&
+			    (!(flags & 0x40000000) || (flags & 0xA2000000))) continue;
+			QWORD destination = rva;
+			if (module_type == VM_MODULE_TYPE::Raw) { destination = raw; if (raw_size < bytes) bytes = raw_size; }
+			if (!bytes) continue;
+			if (destination < headers_size || !fits(image_size, destination, bytes) ||
+			    !fits(image_size, rva, bytes) ||
+			    !vm::read(process, base + rva, data + destination, bytes))
+			{ release_image(allocation); return 0; }
 		}
-		return (PVOID)ret;
+		memcpy(allocation, &base, 8);
+		QWORD stored_size = image_size; memcpy(allocation + 8, &stored_size, 8);
+		return data;
 	}
 
 	inline void free_module(PVOID dumped_module)
@@ -232,81 +200,77 @@ namespace vmwin
 
 	inline QWORD get_dump_export(PVOID dumped_module, PCSTR export_name)
 	{
-		QWORD a0;
-		DWORD a1[4]{};
-
-
-		QWORD base = (QWORD)dumped_module;
-
-
-		a0 = base + *(WORD*)(base + 0x3C);
-		if (a0 == base)
+		if (!dumped_module || !export_name || !*export_name) return 0;
+		BYTE* data = (BYTE*)dumped_module;
+		QWORD size = 0, base = 0;
+		memcpy(&size, data - 8, 8); memcpy(&base, data - 16, 8);
+		pe_info info{};
+		if (size > max_image_size || !parse_pe(data, size, info) || info.image_size != size) return 0;
+		QWORD directory = QWORD(info.nt) + (info.magic == 0x20B ? 0x88 : 0x78);
+		DWORD rva = 0, directory_size = 0;
+		if (!local_read(data, size, directory, rva) || !rva ||
+		    !local_read(data, size, directory + 4, directory_size) || directory_size < 40 ||
+		    !fits(size, rva, directory_size)) return 0;
+		DWORD functions = 0, names = 0, function_table = 0, name_table = 0, ordinal_table = 0;
+		local_read(data, size, QWORD(rva) + 20, functions);
+		local_read(data, size, QWORD(rva) + 24, names);
+		local_read(data, size, QWORD(rva) + 28, function_table);
+		local_read(data, size, QWORD(rva) + 32, name_table);
+		local_read(data, size, QWORD(rva) + 36, ordinal_table);
+		if (!fits(size, function_table, QWORD(functions) * 4) ||
+		    !fits(size, name_table, QWORD(names) * 4) || !fits(size, ordinal_table, QWORD(names) * 2)) return 0;
+		for (DWORD i = 0; i < names; ++i)
 		{
-			return 0;
-		}
-
-		DWORD wow64_off = *(WORD*)(a0 + 0x4) == 0x8664 ? 0x88 : 0x78;
-
-		a0 = base + (QWORD)*(DWORD*)(a0 + wow64_off);
-		if (a0 == base)
-		{
-			return 0;
-		}
-
-		memcpy(&a1, (const void *)(a0 + 0x18), sizeof(a1));
-		while (a1[0]--)
-		{
-			a0 = (QWORD)*(DWORD*)(base + a1[2] + ((QWORD)a1[0] * 4));
-			if (a0 == 0)
-			{
-				continue;
-			}
-
-			if (!strcmpi_imp((const char*)(base + a0), export_name))
-			{
-				a0 = *(WORD*)(base + a1[3] + ((QWORD)a1[0] * 2)) * 4;
-				a0 = *(DWORD*)(base + a1[1] + a0);
-				return (*(QWORD*)((QWORD)dumped_module - 16) + a0);
-			}
+			DWORD name = 0; WORD ordinal = 0;
+			local_read(data, size, QWORD(name_table) + QWORD(i) * 4, name);
+			if (name >= size) return 0;
+			QWORD n = 0;
+			while (n < size - name && data[name + n]) ++n;
+			if (n == size - name) return 0;
+			if (strcmpi_imp((PCSTR)data + name, export_name)) continue;
+			local_read(data, size, QWORD(ordinal_table) + QWORD(i) * 2, ordinal);
+			if (ordinal >= functions) return 0;
+			DWORD target = 0;
+			local_read(data, size, QWORD(function_table) + QWORD(ordinal) * 4, target);
+			// Forwarded exports need a separate resolver, never return their string as code.
+			if (!target || target >= size || (target >= rva && target - rva < directory_size) ||
+			    base > ~(QWORD)0 - target) return 0;
+			return base + target;
 		}
 		return 0;
 	}
-
+	inline QWORD get_module_export(vm_handle process, QWORD base, PCSTR export_name)
+	{
+		if (!export_name || !*export_name) return 0;
+		PVOID dump = dump_module(process, base, VM_MODULE_TYPE::Full);
+		if (!dump) return 0;
+		QWORD result = get_dump_export(dump, export_name);
+		free_module(dump);
+		return result;
+	}
 	inline QWORD scan_pattern(PVOID dumped_module, PCSTR pattern, PCSTR mask, QWORD length)
 	{
-		QWORD ret = 0;
-
-		if (!dumped_module || !pattern || !mask || !length || strlen_imp(mask) != length)
-			return 0;
-
-		QWORD dos_header = (QWORD)dumped_module;
-		QWORD nt_header = (QWORD) * (DWORD*)(dos_header + 0x03C) + dos_header;
-		WORD  machine = *(WORD*)(nt_header + 0x4);
-
-		QWORD section_header = machine == 0x8664 ?
-			nt_header + 0x0108 :
-			nt_header + 0x00F8;
-
-		for (WORD i = 0; i < *(WORD*)(nt_header + 0x06); i++) {
-
-			QWORD section = section_header + ((QWORD)i * 40);
-			DWORD section_characteristics = *(DWORD*)(section + 0x24);
-
-			if (section_characteristics & 0x00000020)
-			{
-				QWORD section_address = dos_header + (QWORD) * (DWORD*)(section + 0x0C);
-				DWORD section_size = *(DWORD*)(section + 0x08);
-				QWORD address = utils::FindPatternEx(section_address, section_size, (BYTE*)pattern, (char*)mask);
-				if (address)
-				{
-					ret = (address - (QWORD)dumped_module) +
-						*(QWORD*)((QWORD)dumped_module - 16);
-					break;
-				}
-			}
-
+		if (!dumped_module || !pattern || !mask || !length) return 0;
+		QWORD mask_size = 0; while (mask_size < length && mask[mask_size]) ++mask_size;
+		if (mask_size != length || mask[mask_size]) return 0;
+		BYTE* data = (BYTE*)dumped_module;
+		QWORD size = 0, base = 0;
+		memcpy(&size, data - 8, 8); memcpy(&base, data - 16, 8);
+		pe_info info{};
+		if (size > max_image_size || !parse_pe(data, size, info) || info.image_size != size) return 0;
+		for (WORD i = 0; i < info.sections; ++i)
+		{
+			QWORD section = info.table + QWORD(i) * 40;
+			DWORD flags = 0, rva = 0, bytes = 0;
+			local_read(data, size, section + 36, flags);
+			local_read(data, size, section + 12, rva);
+			local_read(data, size, section + 8, bytes);
+			if (!fits(size, rva, bytes)) return 0;
+			if (!(flags & 0x20) || !bytes) continue;
+			QWORD address = utils::FindPatternEx((QWORD)(data + rva), bytes, (BYTE*)pattern, (char*)mask);
+			if (address) { QWORD offset = address - (QWORD)data; return base <= ~(QWORD)0 - offset ? base + offset : 0; }
 		}
-		return ret;
+		return 0;
 	}
 
 	QWORD scan_pattern_direct(vm_handle process, QWORD base, PCSTR pattern, PCSTR mask, DWORD length)

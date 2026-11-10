@@ -10,143 +10,142 @@
 //
 namespace vmlinux
 {
+	static const QWORD max_image_size = 512ULL * 1024 * 1024;
+	inline bool add_ok(QWORD address, QWORD bytes) { return address <= ~(QWORD)0 - bytes; }
+	template<class T> inline bool read_value(vm_handle process, QWORD at, T& value)
+	{
+		value = {};
+		return add_ok(at, sizeof(T)) && vm::read(process, at, &value, sizeof(T));
+	}
+	inline bool elf_class(vm_handle process, QWORD base, BYTE& kind)
+	{
+		BYTE ident[EI_NIDENT]{};
+		if (!base || !add_ok(base, sizeof(ident)) || !vm::read(process, base, ident, sizeof(ident)) ||
+		    ident[0] != 0x7f || ident[1] != 'E' || ident[2] != 'L' || ident[3] != 'F' ||
+		    ident[EI_DATA] != ELFDATA2LSB || ident[EI_VERSION] != EV_CURRENT) return false;
+		kind = ident[EI_CLASS];
+		return kind == ELFCLASS32 || kind == ELFCLASS64;
+	}
+	template<class E, class P> inline QWORD find_segment(vm_handle process, QWORD base, DWORD tag, P* found)
+	{
+		E header{};
+		if (!read_value(process, base, header) || header.e_ehsize != sizeof(E) ||
+		    header.e_phentsize != sizeof(P) || !header.e_phnum || header.e_phnum > 1024 ||
+		    header.e_phoff > max_image_size || !add_ok(base, header.e_phoff) ||
+		    !add_ok(base + header.e_phoff, QWORD(header.e_phnum) * sizeof(P))) return 0;
+		for (WORD i = 0; i < header.e_phnum; ++i)
+		{
+			P segment{}; QWORD at = base + header.e_phoff + QWORD(i) * sizeof(P);
+			if (!read_value(process, at, segment)) return 0;
+			if (segment.p_type == tag) { if (found) *found = segment; return at; }
+		}
+		return 0;
+	}
 	inline QWORD get_elf_address(vm_handle process, QWORD base, int tag)
 	{
-		BOOL wow64 = (vm::read_i16(process, base + 0x12) == 62) ? 0 : 1;
-	
-		int pht_count;
-		int pht_file_offset;
-		int pht_size;
-
-		if (wow64)
+		BYTE kind = 0; if (!elf_class(process, base, kind)) return 0;
+		return kind == ELFCLASS32 ? find_segment<Elf32_Ehdr, Elf32_Phdr>(process, base, tag, 0) :
+			find_segment<Elf64_Ehdr, Elf64_Phdr>(process, base, tag, 0);
+	}
+	template<class E, class P, class D> inline QWORD dynamic_value(vm_handle process, QWORD base, QWORD tag)
+	{
+		P segment{};
+		if (!find_segment<E, P>(process, base, PT_DYNAMIC, &segment) ||
+		    !segment.p_memsz || segment.p_memsz > max_image_size ||
+		    !add_ok(base, segment.p_vaddr) || !add_ok(base + segment.p_vaddr, segment.p_memsz)) return 0;
+		QWORD count = segment.p_memsz / sizeof(D);
+		if (count > 65536) return 0;
+		for (QWORD i = 0; i < count; ++i)
 		{
-			pht_count = 0x2C, pht_file_offset = 0x1C, pht_size = 32;
-		}
-		else
-		{
-			pht_count = 0x38, pht_file_offset = 0x20, pht_size = 56;
-		}
-
-		QWORD a0 = vm::read_i32(process, base + pht_file_offset) + base;
-
-		for (WORD i = 0; i < vm::read_i16(process, base + pht_count); i++)
-		{
-			QWORD a2 = pht_size * i + a0;
-			if (vm::read_i32(process, a2) == tag)
-			{
-				return a2;
-			}
+			D entry{};
+			if (!read_value(process, base + segment.p_vaddr + i * sizeof(D), entry) || entry.d_tag == DT_NULL) return 0;
+			if (QWORD(entry.d_tag) == tag) return entry.d_un.d_val;
 		}
 		return 0;
 	}
-
 	inline QWORD get_dyn_address(vm_handle process, QWORD base, QWORD tag)
 	{
-		QWORD dyn = get_elf_address(process, base, 2);
-		if (dyn == 0)
-		{
-			return 0;
-		}
-
-		BOOL wow64 = (vm::read_i16(process, base + 0x12) == 62) ? 0 : 1;
-
-		int reg_size = wow64 ? 4 : 8;
-	
-		vm::read(process, dyn + (2*reg_size), &dyn, reg_size);
-
-		dyn += base;
-	
-		while (1)
-		{
-			QWORD dyn_tag = 0;
-			vm::read(process, dyn, &dyn_tag, reg_size);
-
-			if (dyn_tag == 0)
-			{
-				break;
-			}
-
-			if (dyn_tag == tag)
-			{
-				QWORD address = 0;
-				vm::read(process, dyn + reg_size, &address, reg_size);
-				return address;
-			}
-
-			dyn += (2*reg_size);
-		}
-		return 0;
+		BYTE kind = 0; if (!elf_class(process, base, kind)) return 0;
+		return kind == ELFCLASS32 ? dynamic_value<Elf32_Ehdr, Elf32_Phdr, Elf32_Dyn>(process, base, tag) :
+			dynamic_value<Elf64_Ehdr, Elf64_Phdr, Elf64_Dyn>(process, base, tag);
 	}
-
-	QWORD get_module_export(vm_handle process, QWORD base, PCSTR export_name)
+	template<class S> inline QWORD export_value(vm_handle process, QWORD base, PCSTR name)
 	{
-		int offset, add, length;
-
-		BOOL wow64 = (vm::read_i16(process, base + 0x12) == 62) ? 0 : 1;
-		if (wow64)
+		QWORD strings = get_dyn_address(process, base, DT_STRTAB);
+		QWORD symbols = get_dyn_address(process, base, DT_SYMTAB);
+		QWORD string_size = get_dyn_address(process, base, DT_STRSZ);
+		QWORD entry_size = get_dyn_address(process, base, DT_SYMENT);
+		if (!strings || !symbols || !string_size || string_size > max_image_size ||
+		    entry_size != sizeof(S) || !add_ok(strings, string_size)) return 0;
+		// Loaded dynamic pointer entries are absolute. Bound work even without DT_HASH.
+		QWORD count = 1048576;
+		QWORD hash = get_dyn_address(process, base, DT_HASH);
+		if (hash) { DWORD chains = 0; if (!add_ok(hash, 4) || !read_value(process, hash + 4, chains) || chains > count) return 0; count = chains; }
+		else if (strings > symbols) { QWORD until_strings = (strings - symbols) / sizeof(S); if (until_strings < count) count = until_strings; }
+		if (!add_ok(symbols, count * sizeof(S))) return 0;
+		for (QWORD i = 0; i < count; ++i)
 		{
-			offset = 0x20, add = 0x10, length = 0x04;
-		}
-		else
-		{
-			offset = 0x40, add = 0x18, length = 0x08;
-		}
-
-		QWORD str_tab = get_dyn_address(process, base, 5);
-		QWORD sym_tab = get_dyn_address(process, base, 6);
-
-		sym_tab += add;
-
-		uint32_t st_name = 1;
-		do
-		{
-			char sym_name[120]{};
-			if (vm::read(process, str_tab + st_name, &sym_name, sizeof(sym_name)) == -1)
-				break;
-		
-			if (strcmpi_imp(sym_name, export_name) == 0)
-			{
-				vm::read(process, sym_tab + length, &sym_tab, length);
-				return sym_tab + base;
+			S symbol{};
+			if (!read_value(process, symbols + i * sizeof(S), symbol)) return 0;
+			if (!symbol.st_name || symbol.st_name >= string_size || symbol.st_shndx == SHN_UNDEF) continue;
+			char buffer[120]{}; bool terminated = false;
+			QWORD available = string_size - symbol.st_name;
+			for (QWORD n = 0; n < sizeof(buffer) && n < available; ++n) {
+				if (!read_value(process, strings + symbol.st_name + n, buffer[n])) return 0;
+				if (!buffer[n]) { terminated = true; break; }
 			}
-			sym_tab += add;
-		} while (vm::read(process, sym_tab, &st_name, sizeof(st_name)) != -1);
-
+			if (!terminated || strcmpi_imp(buffer, name)) continue;
+			if (!symbol.st_value) return 0;
+			if (symbol.st_shndx == SHN_ABS) return symbol.st_value;
+			return add_ok(base, symbol.st_value) ? base + symbol.st_value : 0;
+		}
 		return 0;
 	}
-
+	inline QWORD get_module_export(vm_handle process, QWORD base, PCSTR export_name)
+	{
+		BYTE kind = 0;
+		if (!export_name || !*export_name || !elf_class(process, base, kind)) return 0;
+		return kind == ELFCLASS32 ? export_value<Elf32_Sym>(process, base, export_name) : export_value<Elf64_Sym>(process, base, export_name);
+	}
+	template<class E, class P> inline PVOID dump_image(vm_handle process, QWORD base, VM_MODULE_TYPE mode)
+	{
+		E header{};
+		if (!read_value(process, base, header) || header.e_ehsize != sizeof(E) ||
+		    header.e_phentsize != sizeof(P) || !header.e_phnum || header.e_phnum > 1024 ||
+		    header.e_phoff > max_image_size || !add_ok(base, header.e_phoff) ||
+		    !add_ok(base + header.e_phoff, QWORD(header.e_phnum) * sizeof(P))) return 0;
+		QWORD size = 0;
+		for (WORD i = 0; i < header.e_phnum; ++i) {
+			P segment{};
+			if (!read_value(process, base + header.e_phoff + QWORD(i) * sizeof(P), segment)) return 0;
+			if (segment.p_type != PT_LOAD) continue;
+			if (segment.p_vaddr > max_image_size || segment.p_memsz > max_image_size - segment.p_vaddr ||
+			    segment.p_filesz > segment.p_memsz) return 0;
+			QWORD end = QWORD(segment.p_vaddr) + segment.p_memsz; if (end > size) size = end;
+		}
+		if (!size || !add_ok(base, size)) return 0;
+		BYTE* allocation = (BYTE*)malloc(size + 16);
+		if (!allocation) return 0;
+		BYTE* data = allocation + 16; memset(data, 0, size);
+		for (WORD i = 0; i < header.e_phnum; ++i) {
+			P segment{};
+			if (!read_value(process, base + header.e_phoff + QWORD(i) * sizeof(P), segment)) { free(allocation); return 0; }
+			if (segment.p_type != PT_LOAD) continue;
+			if (mode == VM_MODULE_TYPE::CodeSectionsOnly && !(segment.p_flags & PF_X)) continue;
+			if (mode == VM_MODULE_TYPE::ReadOnly && (!(segment.p_flags & PF_R) || (segment.p_flags & (PF_W | PF_X)))) continue;
+			// Revalidate metadata on the second read; the source may have changed.
+			if (segment.p_vaddr > size || segment.p_memsz > size - segment.p_vaddr ||
+			    (segment.p_memsz && !vm::read(process, base + segment.p_vaddr, data + segment.p_vaddr, segment.p_memsz)))
+			{ free(allocation); return 0; }
+		}
+		memcpy(allocation, &base, 8); memcpy(allocation + 8, &size, 8);
+		return data;
+	}
 	inline PVOID dump_module(vm_handle process, QWORD base, VM_MODULE_TYPE module_type)
 	{
-		Elf64_Ehdr ehdr;
-		vm::read(process, base, &ehdr, sizeof(ehdr));
-		QWORD module_size = (ehdr.e_shoff + (ehdr.e_shentsize * ehdr.e_shnum));
-
-		if (module_size == 0)
-		{
-			return 0;
-		}
-
-		QWORD dump = (QWORD)malloc(module_size + 16);
-
-		if (dump == 0)
-		{
-			return 0;
-		}
-
-		*(QWORD*)(dump + 0x00) = base;
-		*(QWORD*)(dump + 0x08) = module_size;
-
-		dump += 16;
-
-		if (!vm::read(process, base, (PVOID)dump, module_size))
-		{
-			dump -= 16;
-
-			free((PVOID)dump);
-			return 0;
-		}
-
-		return (PVOID)dump;
+		BYTE kind = 0; if (!elf_class(process, base, kind) || module_type == VM_MODULE_TYPE::Raw) return 0;
+		return kind == ELFCLASS32 ? dump_image<Elf32_Ehdr, Elf32_Phdr>(process, base, module_type) :
+			dump_image<Elf64_Ehdr, Elf64_Phdr>(process, base, module_type);
 	}
 
 	inline void free_module(PVOID dumped_module)

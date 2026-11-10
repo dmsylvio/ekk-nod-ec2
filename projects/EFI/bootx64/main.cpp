@@ -216,11 +216,6 @@ extern "C" EFI_STATUS EFIAPI ExitBootServicesHook(EFI_HANDLE ImageHandle, UINTN 
 	gST->ConOut->SetCursorPosition(gST->ConOut, 0, 1);
 	PressAnyKey();
 
-	if (!GlobalStatusVariable)
-	{
-		return 0;
-	}
-
 	return gBS->ExitBootServices(ImageHandle, MapKey);
 }
 
@@ -330,6 +325,7 @@ extern "C" EFI_STATUS EFIAPI AllocatePagesHook(EFI_ALLOCATE_TYPE Type, EFI_MEMOR
 	// hook attributes table, we can return correct page attributes for the OS.
 	//
 	routine = GetExportByName(winload, "EfiGetMemoryAttributesTable");
+	if (!routine) return oAllocatePages(Type, MemoryType, Pages, Memory);
 	*(QWORD*)(routine + 0x00) = 0x25FF;
 	*(QWORD*)(routine + 0x06) = (QWORD)GetMemoryAttributesTable;
 
@@ -396,8 +392,10 @@ extern "C" VOID *AllocateImage(QWORD ImageBase)
 	//
 	// copy current runtime image entries to new attributes table
 	//
+	if (!table || !table->NumberOfEntries || table->NumberOfEntries > 65536 ||
+	    table->DescriptorSize < sizeof(EFI_MEMORY_DESCRIPTOR) || table->DescriptorSize > 4096) return 0;
 	QWORD table_size = sizeof (EFI_MEMORY_ATTRIBUTES_TABLE) + table->DescriptorSize * (table->NumberOfEntries + 3);
-	gBS->AllocatePool (EfiBootServicesData, table_size, (void**)&mTable);
+	if (EFI_ERROR(gBS->AllocatePool(EfiBootServicesData, table_size, (void**)&mTable)) || !mTable) return 0;
 	MemCopy( (void *)mTable, (void*)table, sizeof (EFI_MEMORY_ATTRIBUTES_TABLE) + table->DescriptorSize * (table->NumberOfEntries));
 	table = mTable;
 
@@ -431,8 +429,9 @@ extern "C" VOID *AllocateImage(QWORD ImageBase)
 	UINTN page_count  = hdr_count+cde_count+dta_count;
 	QWORD target_addr = last_page->PhysicalStart + EFI_PAGES_TO_SIZE(last_page->NumberOfPages);
 
-	while (1)
+	for (unsigned int attempt = 0; ; ++attempt)
 	{
+		if (attempt >= 256 || target_addr > ~(QWORD)0 - EFI_PAGE_SIZE) return 0;
 		EFI_PHYSICAL_ADDRESS addr = target_addr;
 		if (!EFI_ERROR(gBS->AllocatePages(AllocateAddress, EfiRuntimeServicesCode, page_count, &addr)))
 		{

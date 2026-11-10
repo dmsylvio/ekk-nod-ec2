@@ -117,6 +117,7 @@ BOOL vm::running(vm_handle process)
 
 BOOL vm::read(vm_handle process, QWORD address, PVOID buffer, QWORD length)
 {
+	if (!buffer || !length || address > ~(QWORD)0 - length) return 0;
 	if (process == 0)
 	{
 		return 0;
@@ -137,25 +138,14 @@ BOOL vm::read(vm_handle process, QWORD address, PVOID buffer, QWORD length)
 	while (total_size)
 	{
 		physical_address = pm::translate(cr3, address + offset);
-		if (!physical_address)
-		{
-			if (total_size >= 0x1000)
-			{
-				bytes_read = 0x1000;
-			}
-			else
-			{
-				bytes_read = total_size;
-			}
-			goto E0;
-		}
+		if (!physical_address) return 0;
 
 		current_size = min(0x1000 - (physical_address & 0xFFF), total_size);
 		if (!pm::read(physical_address, (PVOID)((QWORD)buffer + offset), current_size, &bytes_read))
 		{
-			break;
+			return 0;
 		}
-	E0:
+		if (!bytes_read || bytes_read > total_size) return 0;
 		total_size -= bytes_read;
 		offset += bytes_read;
 	}
@@ -164,6 +154,7 @@ BOOL vm::read(vm_handle process, QWORD address, PVOID buffer, QWORD length)
 
 BOOL vm::write(vm_handle process, QWORD address, PVOID buffer, QWORD length)
 {
+	if (!buffer || !length || address > ~(QWORD)0 - length) return 0;
 	if (process == 0)
 	{
 		return 0;
@@ -184,24 +175,14 @@ BOOL vm::write(vm_handle process, QWORD address, PVOID buffer, QWORD length)
 
 	while (total_size) {
 		physical_address = pm::translate(cr3, address + offset);
-		if (!physical_address) {
-			if (total_size >= 0x1000)
-			{
-				bytes_write = 0x1000;
-			}
-			else
-			{
-				bytes_write = total_size;
-			}
-			goto E0;
-		}
+		if (!physical_address) return 0;
+
 		current_size = min(0x1000 - (physical_address & 0xFFF), total_size);
 		if (!pm::write(physical_address, (PVOID)((QWORD)buffer + offset), current_size))
 		{
-			break;
+			return 0;
 		}
 		bytes_write = current_size;
-	E0:
 		total_size -= bytes_write;
 		offset += bytes_write;
 	}
@@ -257,40 +238,16 @@ QWORD vm::scan_pattern_direct(vm_handle process, QWORD base, PCSTR pattern, PCST
 	return vmwin::scan_pattern_direct(process, base, pattern, mask, length);
 }
 
-static BYTE MM_COPY_BUFFER[0x1000];
 static BOOL pm::read(QWORD address, PVOID buffer, QWORD length, QWORD* ret)
 {
-	if (address < (QWORD)g_memory_range_low)
-	{
-		return 0;
-	}
-
-	if (address + length > g_memory_range_high)
-	{
-		return 0;
-	}
-
-	if (length > 0x1000)
-	{
-		length = 0x1000;
-	}
-
-	MM_COPY_ADDRESS physical_address{};
-	physical_address.PhysicalAddress.QuadPart = (LONGLONG)address;
-
-	BOOL v = MmCopyMemory(MM_COPY_BUFFER, physical_address, length, MM_COPY_MEMORY_PHYSICAL, &length) == 0;
-	if (v)
-	{
-		for (QWORD i = length; i--;)
-		{
-			((unsigned char*)buffer)[i] = ((unsigned char*)MM_COPY_BUFFER)[i];
-		}
-	}
-
-	if (ret)
-		*ret = length;
-
-	return v;
+	if (ret) *ret = 0;
+	if (!buffer || !length || length > 0x1000 || address < g_memory_range_low ||
+	    address > g_memory_range_high || length > g_memory_range_high - address) return 0;
+	MM_COPY_ADDRESS source{}; source.PhysicalAddress.QuadPart = (LONGLONG)address;
+	SIZE_T transferred = 0;
+	NTSTATUS status = MmCopyMemory(buffer, source, (SIZE_T)length, MM_COPY_MEMORY_PHYSICAL, &transferred);
+	if (ret) *ret = transferred;
+	return NT_SUCCESS(status) && transferred == length;
 }
 
 static BOOL pm::write(QWORD address, PVOID buffer, QWORD length)
@@ -300,7 +257,7 @@ static BOOL pm::write(QWORD address, PVOID buffer, QWORD length)
 		return 0;
 	}
 
-	if (address + length > g_memory_range_high)
+	if (address > g_memory_range_high || length > g_memory_range_high - address)
 	{
 		return 0;
 	}

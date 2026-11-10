@@ -44,6 +44,8 @@ namespace features
 
 	void reset(void)
 	{
+		if (mouse_down_ms) client::mouse1_up();
+		event_state = 0;
 		mouse_down_ms    = 0;
 		mouse_up_ms      = 0;
 		rcs_old_punch    = {};
@@ -80,7 +82,9 @@ namespace config
 
 inline DWORD random_number(DWORD min, DWORD max)
 {
-	return min + cs2::engine::get_current_ms() % (max + 1 - min);
+	if (max < min) return min;
+	QWORD range = QWORD(max) - min + 1;
+	return min + DWORD(QWORD(cs2::engine::get_current_ms()) % range);
 }
 
 inline void cs2::features::update_settings(void)
@@ -275,7 +279,7 @@ static void cs2::features::has_target_event(QWORD local_player, QWORD target_pla
 				coll.radius))
 			{
 				DWORD current_ms = cs2::engine::get_current_ms();
-				if (current_ms > mouse_up_ms)
+				if (!mouse_up_ms || DWORD(current_ms - mouse_up_ms) < 0x80000000U)
 				{
 					client::mouse1_down();
 					mouse_up_ms   = 0;
@@ -294,7 +298,7 @@ void cs2::features::run(void)
 	if (mouse_down_ms)
 	{
 		DWORD current_ms = cs2::engine::get_current_ms();
-		if (current_ms > mouse_down_ms)
+		if (DWORD(current_ms - mouse_down_ms) < 0x80000000U)
 		{
 			client::mouse1_up();
 			mouse_down_ms   = 0;
@@ -355,6 +359,7 @@ void cs2::features::run(void)
 	DWORD num_shots   = cs2::player::get_shots_fired(local_player);
 	vec2  aim_punch   = cs2::player::get_vec_punch(local_player);
 	float sensitivity = cs2::mouse::get_sensitivity() * cs2::player::get_fov_multipler(local_player);
+	if (!math::finite(sensitivity) || sensitivity <= 0.000001f) return;
 
 	if (config::rcs)
 	{
@@ -400,6 +405,7 @@ void cs2::features::run(void)
 	{
 		if (!cs2::player::is_valid(aimbot_target, cs2::player::get_node(aimbot_target)))
 		{
+			aimbot_bone = 0;
 			aimbot_target = best_target;
 
 			if (aimbot_target == 0)
@@ -519,6 +525,8 @@ void cs2::features::run(void)
 
 	float x = (angles.y / sensitivity) / 0.022f;
 	float y = (angles.x / sensitivity) / -0.022f;
+	if (!math::finite(x) || !math::finite(y) || x >= 2147483648.0f || x < -2147483648.0f ||
+	    y >= 2147483648.0f || y < -2147483648.0f) return;
 	
 	float smooth_x = 0.00f;
 	float smooth_y = 0.00f;
@@ -697,8 +705,14 @@ static void cs2::features::standalone_rcs(DWORD num_shots, vec2 vec_punch, float
 		float x = (vec_punch.x - rcs_old_punch.x) * -1.0f;
 		float y = (vec_punch.y - rcs_old_punch.y) * -1.0f;
 		
-		int mouse_angle_x = (int)(((y * 2.0f) / sensitivity) / -0.022f);
-		int mouse_angle_y = (int)(((x * 2.0f) / sensitivity) / 0.022f);
+		if (!math::finite(sensitivity) || sensitivity <= 0.000001f) return;
+		float move_x = ((y * 2.0f) / sensitivity) / -0.022f;
+		float move_y = ((x * 2.0f) / sensitivity) / 0.022f;
+		if (!math::finite(move_x) || !math::finite(move_y) ||
+		    move_x >= 2147483648.0f || move_x < -2147483648.0f ||
+		    move_y >= 2147483648.0f || move_y < -2147483648.0f) return;
+		int mouse_angle_x = (int)move_x;
+		int mouse_angle_y = (int)move_y;
 
 		if (!aimbot_active)
 		{
@@ -747,6 +761,12 @@ static void cs2::features::esp(QWORD local_player, QWORD target_player, vec3 hea
 	{
 		return;
 	}
+
+	if (!math::finite(window.x) || !math::finite(window.y) ||
+	    window.w <= 0 || window.h <= 0 || window.w > 100000 || window.h > 100000 ||
+	    window.x < -100000 || window.x > 100000 || window.y < -100000 || window.y > 100000 ||
+	    screen_top.x < 0 || screen_top.x > window.w || screen_bottom.x < 0 || screen_bottom.x > window.w ||
+	    screen_top.y < 0 || screen_bottom.y > window.h || screen_bottom.y <= screen_top.y) return;
 
 	float height  = (screen_bottom.y - screen_top.y) / 8.f;
 	float width   = (screen_bottom.y - screen_top.y) / 14.f;
@@ -830,6 +850,12 @@ static void cs2::features::esp(QWORD local_player, QWORD target_player, vec3 hea
 			b = 255.0f;
 		}
 	}
+
+	if (!math::finite(window.x) || !math::finite(window.y) ||
+	    window.w <= 0 || window.h <= 0 || window.w > 100000 || window.h > 100000 ||
+	    window.x < -100000 || window.x > 100000 || window.y < -100000 || window.y > 100000 ||
+	    screen_top.x < 0 || screen_top.x > window.w || screen_bottom.x < 0 || screen_bottom.x > window.w ||
+	    screen_top.y < 0 || screen_bottom.y > window.h || screen_bottom.y <= screen_top.y) return;
 
 	int box_height = (int)(screen_bottom.y - screen_top.y);
 	int box_width = box_height / 2;

@@ -1,9 +1,11 @@
+#include "../shared/linux_process_handle.h"
 #include <stdio.h>
 #include <dirent.h>
 #include <unistd.h>
 #include <string.h>
 #include <stdlib.h>
 #include <fcntl.h>
+#include <errno.h>
 #include "../shared/vm_windows.h"
 
 int get_process_id(const char *process_name)
@@ -19,7 +21,7 @@ int get_process_id(const char *process_name)
 	struct dirent *a0;
 	while ((a0 = readdir(dir)))
 	{
-		if (a0->d_type != DT_DIR)
+		if (a0->d_type != DT_DIR && a0->d_type != DT_UNKNOWN)
 		{
 			continue;
 		}
@@ -27,12 +29,12 @@ int get_process_id(const char *process_name)
 		char buffer[266]{};
 		snprintf(buffer, sizeof(buffer), "/proc/%s/exe", a0->d_name);
 
-		if (readlink(buffer, buffer, sizeof(buffer)) == -1)
-		{
-			continue;
-		}
+		char executable[sizeof(buffer)]{};
+		ssize_t link_length = readlink(buffer, executable, sizeof(executable) - 1);
+		if (link_length < 0 || size_t(link_length) >= sizeof(executable) - 1) continue;
+		executable[link_length] = 0;
 
-		const char *name = strrchr(buffer, '/');
+		const char *name = strrchr(executable, '/');
 		if (name == 0)
 		{
 			continue;
@@ -57,17 +59,23 @@ int get_process_id(const char *process_name)
 static size_t
 read_line(int fd, char *buffer, size_t length)
 {
-	size_t pos = 0;
-	while (--length > 0 && read(fd, &buffer[pos], 1))
-	{
-		if (buffer[pos] == '\n')
-		{
-			buffer[pos] = '\0';
-			return pos;
+	if (!buffer || length < 2) return 0;
+	size_t pos = 0; bool truncated = false;
+	for (;;) {
+		char ch = 0;
+		ssize_t result = read(fd, &ch, 1);
+		if (result < 0 && errno == EINTR) continue;
+		if (result < 0) { buffer[0] = 0; return 0; }
+		if (!result || ch == '\n') {
+			buffer[pos] = 0;
+			if (!truncated) return pos;
+			// Discard an overlong line entirely; never parse its partial fields.
+			if (!result) return 0;
+			pos = 0; truncated = false; continue;
 		}
-		pos++;
+		if (pos + 1 < length) buffer[pos++] = ch;
+		else truncated = true;
 	}
-	return 0;
 }
 
 QWORD get_module_base(int process_id, const char *module_name)
@@ -118,7 +126,7 @@ int get_process_id2(const char *process_name, const char *module_name)
 	struct dirent *a0;
 	while ((a0 = readdir(dir)))
 	{
-		if (a0->d_type != DT_DIR)
+		if (a0->d_type != DT_DIR && a0->d_type != DT_UNKNOWN)
 		{
 			continue;
 		}
@@ -126,12 +134,12 @@ int get_process_id2(const char *process_name, const char *module_name)
 		char buffer[266]{};
 		snprintf(buffer, sizeof(buffer), "/proc/%s/exe", a0->d_name);
 
-		if (readlink(buffer, buffer, sizeof(buffer)) == -1)
-		{
-			continue;
-		}
+		char executable[sizeof(buffer)]{};
+		ssize_t link_length = readlink(buffer, executable, sizeof(executable) - 1);
+		if (link_length < 0 || size_t(link_length) >= sizeof(executable) - 1) continue;
+		executable[link_length] = 0;
 
-		const char *name = strrchr(buffer, '/');
+		const char *name = strrchr(executable, '/');
 		if (name == 0)
 		{
 			continue;
@@ -190,11 +198,7 @@ vm_handle vm::open_process(PCSTR process_name)
 		return 0;
 	}
 
-	vm_handle process = 0;
-	((int*)&process)[0] = fd;
-	((int*)&process)[1] = pid;
-
-	return process;
+	return make_linux_process_handle(fd, pid);
 }
 
 vm_handle vm::open_process_ex(PCSTR process_name, PCSTR dll_name)
@@ -215,11 +219,7 @@ vm_handle vm::open_process_ex(PCSTR process_name, PCSTR dll_name)
 		return 0;
 	}
 
-	vm_handle process = 0;
-	((int*)&process)[0] = fd;
-	((int*)&process)[1] = pid;
-
-	return process;
+	return make_linux_process_handle(fd, pid);
 }
 
 inline void close_file(int fd)
@@ -229,22 +229,28 @@ inline void close_file(int fd)
 
 void vm::close(vm_handle process)
 {
-	close_file(((int*)&process)[0]);
+	if (!process) return;
+	auto* handle = (linux_process_handle*)process;
+	close_file(handle->fd); free(handle);
 }
 
 BOOL vm::running(vm_handle process)
 {
-	return fcntl(((int*)&process)[0], F_GETFD) == 0;
+	if (!process) return 0;
+	auto* handle = (linux_process_handle*)process;
+	return fcntl(handle->fd, F_GETFD) >= 0 && linux_start_ticks(handle->pid) == handle->start_ticks;
 }
 
 BOOL vm::read(vm_handle process, QWORD address, PVOID buffer, QWORD length)
 {
-	return pread(((int*)&process)[0], buffer, length, address) == length;
+	if (!process || !buffer || !length || length > SSIZE_MAX || address > LLONG_MAX || length > QWORD(LLONG_MAX) - address) return 0;
+	return pread(((linux_process_handle*)process)->fd, buffer, length, address) == (ssize_t)length;
 }
 
 BOOL vm::write(vm_handle process, QWORD address, PVOID buffer, QWORD length)
 {
-	return pwrite(((int*)&process)[0], buffer, length, address) == length;
+	if (!process || !buffer || !length || length > SSIZE_MAX || address > LLONG_MAX || length > QWORD(LLONG_MAX) - address) return 0;
+	return pwrite(((linux_process_handle*)process)->fd, buffer, length, address) == (ssize_t)length;
 }
 
 QWORD vm::get_peb(vm_handle process)

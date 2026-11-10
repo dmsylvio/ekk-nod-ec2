@@ -5,7 +5,7 @@
 #include "../library/vm/shared/vm_linux.h"
 
 // Mock remote memory: no live process or privileged backend is used.
-static BYTE remote[1024] = {};
+static BYTE remote[4096] = {};
 BOOL vm::read(vm_handle, QWORD address, PVOID buffer, QWORD length)
 {
     if (address > sizeof(remote) || length > sizeof(remote) - address)
@@ -39,19 +39,26 @@ int main()
     free(data);
 
     // A 119-character export used to write its terminator at index 120.
-    const QWORD image_base = 16, nt = 128, exports = 320, names = 400;
+    const QWORD image_base = 16, nt = 128, exports = image_base + 600, names = image_base + 700;
     auto put32 = [](QWORD at, DWORD value) { memcpy(remote + at, &value, 4); };
+    auto put16 = [](QWORD at, WORD value) { memcpy(remote + at, &value, 2); };
+    put16(image_base, 0x5a4d);
     put32(image_base + 0x3c, nt - image_base);
-    put32(nt + 0x78, exports - image_base);
-    put32(exports + 0x18, 1);
-    put32(exports + 0x20, names - image_base);
-    put32(names, 500 - image_base);
+    put32(nt, 0x4550);
+    put16(nt + 6, 1); put16(nt + 20, 224); put16(nt + 24, 0x10b);
+    put32(nt + 0x50, 2048); put32(nt + 0x54, 512);
+    const QWORD section = nt + 24 + 224;
+    put32(section + 8, 1536); put32(section + 12, 512); put32(section + 36, 0x20);
+    put32(nt + 0x78, 600); put32(nt + 0x7c, 40);
+    put32(exports + 20, 1); put32(exports + 24, 1);
+    put32(exports + 28, 720); put32(exports + 32, 700); put32(exports + 36, 740);
+    put32(image_base + 720, 1800); put16(image_base + 740, 0);
+    put32(names, 800);
     char long_name[120];
-    memset(long_name, 'a', 119);
-    long_name[119] = 0;
-    memcpy(remote + 500, long_name, sizeof(long_name));
-    assert(vmwin::get_module_export(nullptr, image_base, long_name) == image_base);
-    put32(names, sizeof(remote) - image_base);
+    memset(long_name, 'a', 119); long_name[119] = 0;
+    memcpy(remote + image_base + 800, long_name, sizeof(long_name));
+    assert(vmwin::get_module_export(nullptr, image_base, long_name) == image_base + 1800);
+    put32(names, 2048);
     assert(vmwin::get_module_export(nullptr, image_base, long_name) == 0);
 
     vmwin::free_module(nullptr);

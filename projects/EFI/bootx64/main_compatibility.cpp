@@ -176,11 +176,6 @@ extern "C" EFI_STATUS EFIAPI ExitBootServicesHook(EFI_HANDLE ImageHandle, UINTN 
 	gST->ConOut->SetCursorPosition(gST->ConOut, 0, 1);
 	PressAnyKey();
 
-	if (!GlobalStatusVariable)
-	{
-		return 0;
-	}
-
 	return gBS->ExitBootServices(ImageHandle, MapKey);
 }
 

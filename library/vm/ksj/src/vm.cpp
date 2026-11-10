@@ -1,3 +1,6 @@
+#include <mutex>
+static std::recursive_mutex protocol_mutex;
+static bool protocol_failed = false;
 #ifdef __linux__
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -141,6 +144,7 @@ vm_handle vm::open_process(PCSTR process_name)
 	}
 
 	struct _vm_handle *temp_handle = (struct _vm_handle*)malloc(sizeof(struct _vm_handle));
+	if (!temp_handle) return 0;
 	temp_handle->object=process_object;
 	temp_handle->cr3=vm::read_i64(&system_proc, process_object + 0x28);
 	temp_handle->exit_status=client::vm::get_physical_address(fd, system_proc.cr3, process_object + offset_PsGetProcessExitProcessCalled);
@@ -161,7 +165,7 @@ vm_handle vm::open_process_by_module_name(PCSTR dll_name)
 
 void vm::close(vm_handle process)
 {
-	free(process);
+	if (process && process != &system_proc) free(process);
 }
 
 BOOL vm::running(vm_handle process)
@@ -282,22 +286,31 @@ static SOCKET socket_open(void)
 
 static QWORD socket_read(SOCKET fd, PVOID buffer, QWORD length)
 {
-	#ifdef __linux__
-	return recv(fd, (char *)buffer, (int)length, MSG_WAITALL);
-	#else
-	return recv(fd, (char *)buffer, (int)length, 0);
-	#endif
+	if (protocol_failed || !buffer || length > 0x7FFFFFFF) return 0;
+	QWORD done = 0;
+	while (done < length) {
+		int received = recv(fd, (char*)buffer + done, (int)(length - done), 0);
+		if (received <= 0) { protocol_failed = true; return done; }
+		done += received;
+	}
+	return done;
 }
 
 static QWORD socket_write(SOCKET fd, PVOID buffer, QWORD length)
 {
+	if (protocol_failed || !buffer || length > 0x7FFFFFFF) return 0;
+	QWORD done = 0;
+	while (done < length) {
 #ifdef __linux__
-	return write(fd, buffer, length);
+		int sent = send(fd, (char*)buffer + done, (int)(length - done), MSG_NOSIGNAL);
 #else
-	return send(fd, (const char*)buffer, (int)length, 0);
+		int sent = send(fd, (char*)buffer + done, (int)(length - done), 0);
 #endif
+		if (sent <= 0) { protocol_failed = true; return done; }
+		done += sent;
+	}
+	return done;
 }
-
 #ifdef __linux__
 #define FIELD_OFFSET(type, field)    (DWORD)((long)&(((type *)0)->field))
 #endif
@@ -351,11 +364,13 @@ namespace client
 	{
 		BOOL read(SOCKET fd, QWORD address, PVOID buffer, QWORD length)
 		{
+			std::lock_guard<std::recursive_mutex> transaction(protocol_mutex);
 			SERVER_READWRITEPHYS packet;
 			packet.header.ioctl = IOCTL_READPHYS;
 			packet.address = address;
+			if (!buffer || !length || length > 0x7FFFFFFF) return 0;
 			packet.size = (DWORD)length;
-			socket_write(fd, &packet, sizeof(packet));
+			if (socket_write(fd, &packet, sizeof(packet)) != sizeof(packet)) return 0;
 
 			BOOLEAN status=0;
 			if (socket_read(fd, &status, sizeof(status)) != sizeof(status))
@@ -373,9 +388,12 @@ namespace client
 
 		BOOL write(SOCKET fd, QWORD address, PVOID buffer, QWORD length)
 		{
-			QWORD packet_size = length + sizeof(SERVER_READWRITEPHYS);
+			std::lock_guard<std::recursive_mutex> transaction(protocol_mutex);
+			if (!buffer || !length || length > 0x7FFFFFFF - sizeof(SERVER_READWRITEPHYS)) return 0;
+				QWORD packet_size = length + sizeof(SERVER_READWRITEPHYS);
 
 			SERVER_READWRITEPHYS *packet = (SERVER_READWRITEPHYS *)malloc(packet_size);
+				if (!packet) return 0;
 			packet->header.ioctl = IOCTL_WRITEPHYS;
 			packet->address = address;
 			packet->size = (DWORD)length;
@@ -388,12 +406,13 @@ namespace client
 				length
 			);
 
-			socket_write(fd, (void *)packet, packet_size);
+			QWORD sent = socket_write(fd, (void *)packet, packet_size);
 
 			free(packet);
+			if (sent != packet_size) return 0;
 
 			unsigned char status=0;
-			socket_read(fd, &status, 1);
+			if (socket_read(fd, &status, 1) != 1) return 0;
 
 			return (BOOL)status;
 		}
@@ -403,26 +422,29 @@ namespace client
 	{
 		QWORD get_physical_address(SOCKET fd, QWORD cr3, QWORD virtual_address)
 		{
+			std::lock_guard<std::recursive_mutex> transaction(protocol_mutex);
 			SERVER_VIRT2PHYS packet{};
 			packet.header.ioctl = IOCTL_VIRT2PHYS;
 			packet.cr3 = cr3;
 			packet.virtual_address = virtual_address;
-			socket_write(fd, &packet, sizeof(packet));
+			if (socket_write(fd, &packet, sizeof(packet)) != sizeof(packet)) return 0;
 
 			QWORD physical_address = 0;
-			socket_read(fd, &physical_address, sizeof(physical_address));
+			if (socket_read(fd, &physical_address, sizeof(physical_address)) != sizeof(physical_address)) return 0;
 
 			return physical_address;
 		}
 
 		BOOL read(SOCKET fd, QWORD cr3, QWORD address, PVOID buffer, QWORD length)
 		{
+			std::lock_guard<std::recursive_mutex> transaction(protocol_mutex);
 			SERVER_READWRITEVIRT packet{};
 			packet.header.ioctl = IOCTL_READVIRT;
 			packet.cr3 = cr3;
 			packet.address = address;
+			if (!buffer || !length || length > 0x7FFFFFFF) return 0;
 			packet.size = (DWORD)length;
-			socket_write(fd, &packet, sizeof(packet));
+			if (socket_write(fd, &packet, sizeof(packet)) != sizeof(packet)) return 0;
 
 			BOOLEAN status=0;
 			if (socket_read(fd, &status, sizeof(status)) != sizeof(status))
@@ -439,9 +461,12 @@ namespace client
 
 		BOOL write(SOCKET fd, QWORD cr3, QWORD address, PVOID buffer, QWORD length)
 		{
-			QWORD packet_size = length + sizeof(SERVER_READWRITEVIRT);
+			std::lock_guard<std::recursive_mutex> transaction(protocol_mutex);
+			if (!buffer || !length || length > 0x7FFFFFFF - sizeof(SERVER_READWRITEVIRT)) return 0;
+				QWORD packet_size = length + sizeof(SERVER_READWRITEVIRT);
 
 			SERVER_READWRITEVIRT *packet = (SERVER_READWRITEVIRT *)malloc(packet_size);
+			if (!packet) return 0;
 			packet->header.ioctl = IOCTL_WRITEVIRT;
 			packet->cr3 = cr3;
 			packet->address = address;
@@ -455,12 +480,13 @@ namespace client
 				length
 			);
 
-			socket_write(fd, (void *)packet, packet_size);
+			QWORD sent = socket_write(fd, (void *)packet, packet_size);
 
 			free(packet);
+			if (sent != packet_size) return 0;
 
 			unsigned char status=0;
-			socket_read(fd, &status, 1);
+			if (socket_read(fd, &status, 1) != 1) return 0;
 
 			return (BOOL)status;
 		}
@@ -468,24 +494,26 @@ namespace client
 
 	QWORD get_system_cr3(SOCKET fd)
 	{
+			std::lock_guard<std::recursive_mutex> transaction(protocol_mutex);
 		SERVER_PACKET packet;
 		packet.ioctl = IOCTL_CR3;
-		socket_write(fd, &packet, sizeof(packet));
+		if (socket_write(fd, &packet, sizeof(packet)) != sizeof(packet)) return 0;
 
 		QWORD cr3 = 0;
-		socket_read(fd, &cr3, sizeof(cr3));
+		if (socket_read(fd, &cr3, sizeof(cr3)) != sizeof(cr3)) return 0;
 		
 		return cr3;
 	}
 
 	QWORD get_ntoskrnl_base(SOCKET fd)
 	{
+			std::lock_guard<std::recursive_mutex> transaction(protocol_mutex);
 		SERVER_PACKET packet;
 		packet.ioctl = IOCTL_NTOSKRNL;
-		socket_write(fd, &packet, sizeof(packet));
+		if (socket_write(fd, &packet, sizeof(packet)) != sizeof(packet)) return 0;
 
 		QWORD base = 0;
-		socket_read(fd, &base, sizeof(base));
+		if (socket_read(fd, &base, sizeof(base)) != sizeof(base)) return 0;
 
 		return base;
 	}
@@ -493,6 +521,7 @@ namespace client
 
 static BOOL vm::initialize(void)
 {
+	std::lock_guard<std::recursive_mutex> initialization(protocol_mutex);
 	//
 	// if we are ready for vm calls
 	//

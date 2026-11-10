@@ -313,8 +313,10 @@ static BOOL mouse::open(void)
 				}
 
 				PULONG_PTR device_extension = (PULONG_PTR)hid_device_object->DeviceExtension;
-				ULONG_PTR device_ext_size = ((ULONG_PTR)hid_device_object->DeviceObjectExtension - (ULONG_PTR)hid_device_object->DeviceExtension) / 4;
-				for (ULONG_PTR i = 0; i < device_ext_size; i++)
+				ULONG_PTR extension_begin = (ULONG_PTR)hid_device_object->DeviceExtension;
+				ULONG_PTR extension_end = (ULONG_PTR)hid_device_object->DeviceObjectExtension;
+				ULONG_PTR device_ext_size = extension_begin && extension_end > extension_begin ? (extension_end - extension_begin) / sizeof(ULONG_PTR) : 0;
+				for (ULONG_PTR i = 0; i + 1 < device_ext_size; i++)
 				{
 					if (device_extension[i] == (ULONG_PTR)class_device_object && device_extension[i + 1] > (ULONG_PTR)class_driver_object)
 					{

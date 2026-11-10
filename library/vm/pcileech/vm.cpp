@@ -134,27 +134,29 @@ void vm::close(vm_handle process)
 
 BOOL vm::running(vm_handle process)
 {
-	UNREFERENCED_PARAMETER(process);
+	if (!process || !initialize()) return 0;
+	SIZE_T size = sizeof(VMMDLL_PROCESS_INFORMATION);
+	VMMDLL_PROCESS_INFORMATION info{};
+	info.magic = VMMDLL_PROCESS_INFORMATION_MAGIC;
+	info.wVersion = VMMDLL_PROCESS_INFORMATION_VERSION;
+	return VMMDLL_ProcessGetInformation(vmdll, (DWORD)(QWORD)process, &info, &size);
 
-	if (!initialize()) return 0;
-	//
-	// not implemented yet
-	//
-
-	return 1;
 }
 
 BOOL vm::read(vm_handle process, QWORD address, PVOID buffer, QWORD length)
 {
 	if (!initialize()) return 0;
 
-	return VMMDLL_MemReadEx(vmdll, (DWORD)(QWORD)process, address, (PBYTE)buffer, (DWORD)length, 0, VMMDLL_FLAG_NOCACHE);
+	if (!process || !buffer || !length || length > 0xFFFFFFFFULL || address > ~(QWORD)0 - length) return 0;
+	DWORD completed = 0;
+	return VMMDLL_MemReadEx(vmdll, (DWORD)(QWORD)process, address, (PBYTE)buffer, (DWORD)length, &completed, VMMDLL_FLAG_NOCACHE) && completed == length;
 }
 
 BOOL vm::write(vm_handle process, QWORD address, PVOID buffer, QWORD length)
 {
 	if (!initialize()) return 0;
 
+	if (!process || !buffer || !length || length > 0xFFFFFFFFULL || address > ~(QWORD)0 - length) return 0;
 	return VMMDLL_MemWrite(vmdll, (DWORD)(QWORD)process, address, (PBYTE)buffer, (DWORD)length);
 }
 

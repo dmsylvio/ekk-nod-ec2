@@ -274,7 +274,7 @@ void kmbox::net::send(unsigned int cmd)
 	softmouse.y = 0;
 	SOCKADDR_IN sclient{};
 	int clen = sizeof(sclient);
-	recvfrom(net_socket, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
+	recvfrom(net_socket, (char*)&rx, sizeof(rx), 0, (struct sockaddr*)&sclient, &clen);
 }
 
 BOOL kmbox::net::open()
@@ -326,7 +326,7 @@ BOOL kmbox::net::open()
 	sendto(net_socket, (const char*)&tx, sizeof(cmd_head_t), 0, (struct sockaddr*)&address_srv, sizeof(address_srv));
 	Sleep(20);
 	int clen = sizeof(address_srv);
-	if (recvfrom(net_socket, (char*)&rx, 1024, 0, (struct sockaddr*)&address_srv, &clen) < 0)
+	if (recvfrom(net_socket, (char*)&rx, sizeof(rx), 0, (struct sockaddr*)&address_srv, &clen) < 0)
 	{
 		closesocket(net_socket);
 		WSACleanup();

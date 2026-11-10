@@ -1036,7 +1036,7 @@ static void csgo::features::esp(C_Player local_player, C_Player target_player)
 	if (screen_size.x == 0 || screen_size.y == 0)
 	{
 		screen_size.x = 1920;
-		screen_size.x = 1080;
+		screen_size.y = 1080;
 	}
 
 	vec3 screen_bottom, screen_top;

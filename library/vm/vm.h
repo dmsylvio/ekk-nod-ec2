@@ -1,6 +1,8 @@
 #ifndef VM_H
 #define VM_H
 
+#include <string.h>
+
 #ifdef _KERNEL_MODE
 #pragma warning (disable: 4996)
 #include <ntifs.h>

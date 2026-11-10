@@ -36,6 +36,21 @@ int main()
     put<DWORD>(64 + 2048, 99);
     assert(cs2::engine::get_current_ms() == 99);
 
+    // Bounds-aware local dump reads reject one-past-end and unaligned truncation.
+    auto* image = static_cast<BYTE*>(calloc(32, 1));
+    QWORD image_size = 16; memcpy(image + 8, &image_size, 8);
+    memcpy(image + 16, "field", 6);
+    assert(cs2::dump_name_equals(image + 16, (PCSTR)image + 16, "field"));
+    assert(!cs2::dump_name_equals(image + 16, (PCSTR)image + 32, "field"));
+    assert(cs2::read_dump<QWORD>(image + 16, (QWORD)image + 31) == 0);
+    free(image);
+    assert(!cs2::entity::has_defuser(100));
+    assert(!cs2::player::is_defusing(100));
+    assert(!cs2::player::get_weapon_address(100));
+    assert(!cs2::entity::get_client_entity(-1));
+    assert(!cs2::node::get_bone_position(100, -1, nullptr));
+    assert(cs2::node::get_dormant(0));
+
     cs2::interfaces::cvar = 3000;
     put<QWORD>(3064, 4000);
     put<DWORD>(3160, 1);
@@ -49,6 +64,8 @@ int main()
     memset(oversized, 'a', 120); oversized[120] = 0;
     assert(cs2::engine::get_convar(oversized) == 0);
     assert(cs2::engine::get_convar(nullptr) == 0);
+    memory[6000 + 119] = 'b';
+    assert(cs2::engine::get_convar(longest) == 0);
     put<QWORD>(5000, sizeof(memory));
     assert(cs2::engine::get_convar(longest) == 0);
     put<DWORD>(3160, ~DWORD(0));

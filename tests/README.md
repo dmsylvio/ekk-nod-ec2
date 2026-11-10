@@ -1,21 +1,13 @@
-# Isolated memory-safety regression tests
+# Local safety regression tests
 
-Run from the repository root with GCC on Linux:
+Run from the repository root on Linux with GCC, Python 3 and pthread support:
 
 ```sh
-mkdir -p /tmp/ekk-tests
-g++ -std=c++11 -g -O1 -fsanitize=address,undefined \
-  -fno-omit-frame-pointer -ffunction-sections -Wl,--gc-sections \
-  tests/memory_safety.cpp -o /tmp/ekk-tests/memory_safety
-/tmp/ekk-tests/memory_safety
+bash tests/run_safety.sh
 ```
 
-The tests use synthetic buffers and mocked remote reads. They cover exact and
-last-position pattern matches, wildcard masks, oversized patterns, empty/null
-arguments, address wraparound, null/valid module release, and a 119-character
-export name plus a failed name read. No game, driver, DMA, or EFI code is run.
+The suite uses AddressSanitizer/UndefinedBehaviorSanitizer with simulated images,
+mocked remote memory, the test process's own /proc metadata, pipes and socketpair.
+It does not execute a game, kernel driver, EFI image or DMA device.
 
-This first batch addresses audit findings 33, 38, 39, and 70. PE/ELF header and
-section validation, unbounded export enumeration, and the other audit findings
-remain open. Passing these tests does not validate malformed PE/ELF parsing or
-Windows/kernel builds.
+See docs/FIXES_STATUS.md for scope, compatibility changes and unresolved items.

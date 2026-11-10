@@ -622,6 +622,7 @@ static void apex::features::esp(QWORD local_player, QWORD target_player, vec3 he
 	}
 
 	int  max_health     = apex::player::get_max_health(target_player);
+	if (max_health <= 0) return;
 	float target_health = ((float)apex::player::get_health(target_player) / (float)max_health) * 255.0f;
 	float r = 255.0f - target_health;
 	float g = target_health;
