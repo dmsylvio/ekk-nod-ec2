@@ -58,6 +58,46 @@ namespace cs2
 		static int m_pWeaponServices = 0;
 	}
 
+	static void reset_session(void)
+	{
+		if (game_handle)
+			vm::close(game_handle);
+		game_handle = 0;
+		sdl::sdl_window = 0;
+		sdl::sdl_mouse = 0;
+		interfaces::resource = 0;
+		interfaces::entity = 0;
+		interfaces::cvar = 0;
+		interfaces::input = 0;
+		interfaces::player = 0;
+		direct::local_player = 0;
+		direct::view_angles = 0;
+		direct::view_matrix = 0;
+		direct::button_state = 0;
+		convars::sensitivity = 0;
+		convars::mp_teammates_are_enemies = 0;
+		convars::cl_crosshairalpha = 0;
+		netvars::m_flFOVSensitivityAdjust = 0;
+		netvars::m_pGameSceneNode = 0;
+		netvars::m_iHealth = 0;
+		netvars::m_lifeState = 0;
+		netvars::m_iTeamNum = 0;
+		netvars::m_vecViewOffset = 0;
+		netvars::m_vecOrigin = 0;
+		netvars::m_bDormant = 0;
+		netvars::m_hPawn = 0;
+		netvars::m_modelState = 0;
+		netvars::m_aimPunchCache = 0;
+		netvars::m_iShotsFired = 0;
+		netvars::m_vOldOrigin = 0;
+		netvars::m_pClippingWeapon = 0;
+		netvars::v_angle = 0;
+		netvars::m_bIsDefusing = 0;
+		netvars::m_bPawnHasDefuser = 0;
+		netvars::m_hActiveWeapon = 0;
+		netvars::m_pWeaponServices = 0;
+	}
+
 	static BOOL initialize(void);
 	static QWORD get_interface(QWORD base, PCSTR name);
 	QWORD get_interface_function(QWORD interface_address, DWORD index);
@@ -110,8 +150,9 @@ static BOOL cs2::initialize(void)
 		{
 			return 1;
 		}
-		game_handle = 0;
+		reset_session();
 	}
+	reset_session();
 
 	// Verificar se o processo "cs2.exe" está em execução
 	if (!vm::process_exists(get_process_name()))
@@ -136,8 +177,7 @@ static BOOL cs2::initialize(void)
 	{
 		LOG(__FILE__ ": line %d\n", __LINE__);
 	E1:
-		vm::close(game_handle);
-		game_handle = 0;
+		reset_session();
 		return 0;
 	}
 	
@@ -166,10 +206,15 @@ static BOOL cs2::initialize(void)
 	interfaces::player      = interfaces::entity + 0x10;
 	JZ(interfaces::cvar     = get_interface(vm::get_module(game_handle, get_tier0_name()), "VEngineCvar0"), E1);
 	JZ(interfaces::input    = get_interface(inputsystem, "InputSystemVersion0"), E1);
-	direct::button_state    = vm::read_i32(game_handle,
-		vm::get_target_os() == VmOs::Windows 
-		? get_interface_function(interfaces::input, 18) + get_button_off()	
-		: get_interface_function(interfaces::input, 19) + get_button_off());
+	{
+		QWORD function = get_interface_function(interfaces::input,
+			vm::get_target_os() == VmOs::Windows ? 18 : 19);
+		if (!function || function > ~(QWORD)0 - get_button_off() ||
+		    !vm::read(game_handle, function + get_button_off(),
+		              &direct::button_state, sizeof(direct::button_state)) ||
+		    !direct::button_state || interfaces::input > ~(QWORD)0 - direct::button_state)
+			goto E1;
+	}
 
 	if (vm::get_target_os() == VmOs::Linux)
 	{
@@ -207,7 +252,7 @@ static BOOL cs2::initialize(void)
 		// viewmatrix: 48 63 c2 48 8d 0d ? ? ? ? 48 c1
 		// Fallback pattern: 48 8d 0d ? ? ? ? 48 8b
 		//
-		JZ(direct::view_matrix = vm::scan_pattern_direct(game_handle, client_dll, "\x48\x63\xc2\x48\x8d\x0d\x00\x00\x00\x00\x48\xc1", "xxxxxx????xx", 12), E1);
+		direct::view_matrix = vm::scan_pattern_direct(game_handle, client_dll, "\x48\x63\xc2\x48\x8d\x0d\x00\x00\x00\x00\x48\xc1", "xxxxxx????xx", 12);
 		
 		// Se o primeiro padrão falhar, tenta o padrão alternativo
 		if (direct::view_matrix == 0)
@@ -220,6 +265,8 @@ static BOOL cs2::initialize(void)
 			direct::view_matrix = vm::get_relative_address(game_handle, direct::view_matrix + 0x03, 3, 7);
 		}
 	}
+
+	JZ(direct::view_matrix, E1);
 
 	JZ(convars::sensitivity              = engine::get_convar("sensitivity"), E1);
 	JZ(convars::mp_teammates_are_enemies = engine::get_convar("mp_teammates_are_enemies"), E1);
@@ -565,6 +612,13 @@ static BOOL cs2::initialize(void)
 	JZ(netvars::m_aimPunchCache, E1);
 	JZ(netvars::m_iShotsFired, E1);
 	JZ(netvars::m_vOldOrigin, E1);
+	JZ(netvars::m_pClippingWeapon, E1);
+	JZ(netvars::v_angle, E1);
+	JZ(netvars::m_bIsDefusing, E1);
+	JZ(netvars::m_bPawnHasDefuser, E1);
+	JZ(netvars::m_hActiveWeapon, E1);
+	JZ(netvars::m_pWeaponServices, E1);
+
 
 
 	return 1;
@@ -628,56 +682,72 @@ QWORD cs2::sdl::get_mouse(void)
 
 BOOL cs2::sdl::get_mouse_button(QWORD mouse)
 {
-	DWORD i;
-	DWORD buttonstate = 0;
-	
-	DWORD num_sources = vm::read_i32(game_handle, mouse + 0xD0);
-	QWORD sources     = mouse + 0xD8;
-
-	for (i = 0; i < num_sources; ++i)
+	if (!game_handle || !mouse || mouse > ~(QWORD)0 - 0xD8)
+		return 0;
+	DWORD count = 0, buttonstate = 0;
+	const DWORD max_sources = 256; // Defensive work budget.
+	QWORD sources = mouse + 0xD8;
+	if (!vm::read(game_handle, mouse + 0xD0, &count, sizeof(count)) ||
+	    count > max_sources || sources > ~(QWORD)0 - QWORD(count) * 8)
+		return 0;
+	for (DWORD i = 0; i < count; ++i)
 	{
-		QWORD mouse_source = vm::read_i64(game_handle, (sources + (i * 8)));
-		DWORD mouse_id     = vm::read_i32(game_handle, mouse_source + 0x00);
-		DWORD button_state = vm::read_i32(game_handle, mouse_source + 0x04);
-				
-		if (mouse_id != (DWORD)-1) {
-			buttonstate |= button_state;
-		}
+		QWORD source = 0;
+		DWORD id = 0, state = 0;
+		if (!vm::read(game_handle, sources + QWORD(i) * 8, &source, sizeof(source)) ||
+		    !source || source > ~(QWORD)0 - 4 ||
+		    !vm::read(game_handle, source, &id, sizeof(id)) ||
+		    !vm::read(game_handle, source + 4, &state, sizeof(state)))
+			return 0;
+		if (id != (DWORD)-1)
+			buttonstate |= state;
 	}
 	return buttonstate;
 }
 
 QWORD cs2::engine::get_convar(const char *name)
 {
-	QWORD objs = vm::read_i64(game_handle, interfaces::cvar + 64);
-
-	QWORD convar_length = strlen_imp(name);
-
-	for (DWORD i = 0; i < vm::read_i32(game_handle, interfaces::cvar + 160); i++)
+	if (!game_handle || !interfaces::cvar || !name)
+		return 0;
+	QWORD name_length = 0;
+	while (name_length < 120 && name[name_length])
+		++name_length;
+	if (!name_length || name_length >= 120 || interfaces::cvar > ~(QWORD)0 - 160)
+		return 0;
+	QWORD objs = 0;
+	DWORD count = 0;
+	// Defensive work budget, not a claim about the game's current layout.
+	const DWORD max_convars = 65536;
+	if (!vm::read(game_handle, interfaces::cvar + 64, &objs, sizeof(objs)) || !objs ||
+	    !vm::read(game_handle, interfaces::cvar + 160, &count, sizeof(count)) ||
+	    count > max_convars || objs > ~(QWORD)0 - QWORD(count) * 16)
+		return 0;
+	for (DWORD i = 0; i < count; ++i)
 	{
-		QWORD entry = vm::read_i64(game_handle, objs + 16 * i);
-		if (entry == 0)
-		{
-			break;
-		}
-		
+		QWORD entry = 0, source = 0;
 		char convar_name[120]{};
-		vm::read(game_handle, vm::read_i64(game_handle, entry + 0x00), convar_name, convar_length);
-		convar_name[convar_length] = 0;
-
+		if (!vm::read(game_handle, objs + QWORD(i) * 16, &entry, sizeof(entry)) || !entry)
+			return 0;
+		if (!vm::read(game_handle, entry, &source, sizeof(source)) || !source ||
+		    !vm::read(game_handle, source, convar_name, name_length))
+			return 0;
+		convar_name[name_length] = 0;
 		if (!strcmpi_imp(convar_name, name))
-		{
-			LOG("get_convar [%s %p]\n", convar_name, (void *)entry);
 			return entry;
-		}
 	}
 	return 0;
 }
 
 DWORD cs2::engine::get_current_ms(void)
 {
-	static DWORD offset = vm::read_i32(game_handle, get_interface_function(interfaces::input, 16) + 2);
-	return vm::read_i32(game_handle, interfaces::input + offset);
+	QWORD function = get_interface_function(interfaces::input, 16);
+	DWORD offset = 0, value = 0;
+	if (!function || function > ~(QWORD)0 - 2 ||
+	    !vm::read(game_handle, function + 2, &offset, sizeof(offset)) ||
+	    !offset || interfaces::input > ~(QWORD)0 - offset ||
+	    !vm::read(game_handle, interfaces::input + offset, &value, sizeof(value)))
+		return 0;
+	return value;
 }
 
 vec2 cs2::engine::get_viewangles(void)
@@ -1050,7 +1120,7 @@ BOOL cs2::node::get_bone_position(QWORD node, int index, vec3 *data)
 
 static QWORD cs2::get_interface(QWORD base, PCSTR name)
 {
-	if (base == 0)
+	if (!base || !name || !game_handle)
 	{
 		return 0;
 	}
@@ -1073,16 +1143,20 @@ static QWORD cs2::get_interface(QWORD base, PCSTR name)
 		return 0;
 	}
 
-	QWORD name_length = strlen_imp(name);
+	QWORD name_length = 0;
+	while (name_length < 120 && name[name_length])
+		++name_length;
+	if (!name_length || name_length >= 120)
+		return 0;
 
-	while (1)
+	for (DWORD visited = 0; visited < 4096; ++visited)
 	{
 		char interface_name[120]{};
-		vm::read(game_handle, 
-			vm::read_i64(game_handle, interface_entry + 8),
-			interface_name,
-			name_length
-			);
+		QWORD source = 0;
+		if (interface_entry > ~(QWORD)0 - 16 ||
+		    !vm::read(game_handle, interface_entry + 8, &source, sizeof(source)) || !source ||
+		    !vm::read(game_handle, source, interface_name, name_length))
+			return 0;
 
 		interface_name[name_length] = 0;
 		
@@ -1093,6 +1167,8 @@ static QWORD cs2::get_interface(QWORD base, PCSTR name)
 			// ret
 			//
 			QWORD vfunc = vm::read_i64(game_handle, interface_entry);
+			if (!vfunc || vfunc > ~(QWORD)0 - 7)
+				return 0;
 
 
 			//
@@ -1111,6 +1187,14 @@ static QWORD cs2::get_interface(QWORD base, PCSTR name)
 
 QWORD cs2::get_interface_function(QWORD interface_address, DWORD index)
 {
-	return vm::read_i64(game_handle, vm::read_i64(game_handle, interface_address) + (index * 8));
+	if (!game_handle || !interface_address)
+		return 0;
+	QWORD table = 0, function = 0;
+	if (!vm::read(game_handle, interface_address, &table, sizeof(table)) || !table ||
+	    table > ~(QWORD)0 - QWORD(index) * 8)
+		return 0;
+	if (!vm::read(game_handle, table + QWORD(index) * 8, &function, sizeof(function)))
+		return 0;
+	return function;
 }
 
