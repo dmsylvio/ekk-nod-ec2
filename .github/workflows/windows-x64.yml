@@ -1,0 +1,43 @@
+name: Windows x64 build
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/windows-x64.yml'
+      - 'projects/UM/**'
+      - 'cs2/**'
+      - 'csgo/**'
+      - 'apex/**'
+      - 'library/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-x64:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: microsoft/setup-msbuild@v3
+        with:
+          msbuild-architecture: x64
+      - name: Build and stage Windows x64 executable
+        shell: pwsh
+        run: |
+          $package = Join-Path $env:RUNNER_TEMP 'ekk-windows-x64'
+          New-Item -ItemType Directory -Force -Path $package | Out-Null
+          msbuild projects/UM/um.sln /t:Rebuild /m /p:Configuration=Release /p:Platform=x64 "/p:OutDir=$package/"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not (Test-Path (Join-Path $package 'um.exe') -PathType Leaf)) {
+            throw 'The Windows build did not produce um.exe'
+          }
+          Copy-Item projects/UM/SDL3.dll -Destination $package
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ekk-windows-x64
+          path: |
+            ${{ runner.temp }}/ekk-windows-x64/um.exe
+            ${{ runner.temp }}/ekk-windows-x64/SDL3.dll
+          if-no-files-found: error

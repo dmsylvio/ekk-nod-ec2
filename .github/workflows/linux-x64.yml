@@ -19,6 +19,8 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
+      - name: Install X11 development headers
+        run: sudo apt-get update && sudo apt-get install -y libx11-dev x11proto-dev
       - name: Build Linux x64 executable
         shell: bash
         run: |
@@ -28,8 +30,9 @@ jobs:
             cs2/shared/cs2.cpp cs2/shared/cs2features.cpp \
             apex/shared/apex.cpp apex/shared/apexfeatures.cpp \
             library/vm/linux/vm.cpp projects/LINUX/libSDL3.so.0.0.0 \
-            -Wl,-rpath,'$ORIGIN' -o dist/ekk-linux-x64/ekk-linux
+            -lX11 -ldl -Wl,-rpath,'$ORIGIN' -o dist/ekk-linux-x64/ekk-linux
           cp projects/LINUX/libSDL3.so.0.0.0 dist/ekk-linux-x64/libSDL3.so.0
+          cp projects/LINUX/settings_panel.py dist/ekk-linux-x64/
           readelf -h dist/ekk-linux-x64/ekk-linux
           ldd dist/ekk-linux-x64/ekk-linux | tee dist/dependencies.txt
           if grep -q 'not found' dist/dependencies.txt; then exit 1; fi

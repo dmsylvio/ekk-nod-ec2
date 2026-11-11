@@ -293,8 +293,11 @@ void cs2::features::run(void)
 
 	weapon_class = cs2::player::get_weapon_class(local_player);
     update_settings();
-    #ifdef EC_UM_CLOCK
+    #if defined(EC_UM_CLOCK) || defined(__linux__)
     config::visuals_enabled = client::overlay_enabled();
+#endif
+#ifdef __linux__
+    config::aimbot_smooth = client::aim_smoothing();
 #endif
     const BOOL ffa = cs2::gamemode::is_ffa();
     if (config::visuals_enabled)
@@ -303,7 +306,7 @@ void cs2::features::run(void)
     //
     // update buttons
 	//
-	#ifdef EC_UM_CLOCK
+	#if defined(EC_UM_CLOCK) || defined(__linux__)
     b_triggerbot_button = client::trigger_pressed();
     b_aimbot_button = client::aim_pressed();
 #else
@@ -403,7 +406,7 @@ void cs2::features::run(void)
 	
 	float aimbot_fov = 360.0f;
 
-	#ifdef EC_UM_CLOCK
+	#if defined(EC_UM_CLOCK) || defined(__linux__)
     if (!aimbot_bone) aimbot_bone = client::choose_aim_bone();
     vec3 selected_position{};
     if (!cs2::node::get_bone_position(node, aimbot_bone, &selected_position)) return;
@@ -666,14 +669,18 @@ static void cs2::features::standalone_rcs(DWORD num_shots, vec2 vec_punch, float
 
 static void cs2::features::esp(QWORD local_player, QWORD target_player, vec3 head)
 {
+    cs2::WINDOW_INFO window{};
+#ifdef __linux__
+	int width = 0, height = 0;
+	if (!client::get_overlay_size(&width, &height))
+		return;
+	window.w = static_cast<float>(width);
+	window.h = static_cast<float>(height);
+#else
 	QWORD sdl_window = cs2::sdl::get_window();
-    if (sdl_window == 0)
+	if (!sdl_window || !cs2::sdl::get_window_info(sdl_window, &window))
 		return;
-
-
-	cs2::WINDOW_INFO window{};
-	if (!cs2::sdl::get_window_info(sdl_window, &window))
-		return;
+#endif
 
 	/*
 	float view = cs2::player::get_vec_view(local_player) - 10.0f;

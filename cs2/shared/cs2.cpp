@@ -1,4 +1,7 @@
 #include "cs2.h"
+#ifdef __linux__
+#include <time.h>
+#endif
 
 namespace cs2
 {
@@ -41,6 +44,11 @@ namespace cs2
 	{
 		static int m_flFOVSensitivityAdjust = 0;
 		static int m_pGameSceneNode = 0;
+		static int m_Item = 0;
+		static int m_iItemDefinitionIndex = 0;
+		static int m_pAimPunchServices = 0;
+		static int m_unpredictableBaseTick = 0;
+		static int m_AttributeManager = 0;
 		static int m_iHealth = 0;
 		static int m_lifeState = 0;
 		static int m_iTeamNum = 0;
@@ -84,6 +92,42 @@ namespace cs2
 		return false;
 	}
 
+	static int class_field_offset(PVOID dump, QWORD base, PCSTR class_name, PCSTR field_name)
+	{
+		QWORD size = 0;
+		memcpy(&size, (BYTE*)dump - 8, sizeof(size));
+		const QWORD local = (QWORD)dump;
+		int result = 0;
+		for (QWORD pos = 0; size >= 0x38 && pos <= size - 0x38; pos += 8)
+		{
+			const QWORD name = read_dump<QWORD>(dump, local + pos + 8);
+			if (name < base || name - base >= size ||
+			    !dump_name_equals(dump, (PCSTR)(local + name - base), class_name))
+				continue;
+			const int class_size = read_dump<int>(dump, local + pos + 0x20);
+			const short count = read_dump<short>(dump, local + pos + 0x24);
+			const QWORD fields = read_dump<QWORD>(dump, local + pos + 0x30);
+			if (class_size <= 0 || class_size > 0x20000 || count <= 0 || count > 2048 ||
+			    fields < base || fields - base >= size || QWORD(count) * 32 > size - (fields - base))
+				continue;
+			for (int index = 0; index < count; ++index)
+			{
+				const QWORD field = local + fields - base + QWORD(index) * 32;
+				const QWORD field_name_ptr = read_dump<QWORD>(dump, field);
+				const int offset = read_dump<int>(dump, field + 0x10);
+				if (field_name_ptr < base || field_name_ptr - base >= size ||
+				    offset <= 0 || offset >= class_size ||
+				    !dump_name_equals(dump, (PCSTR)(local + field_name_ptr - base), field_name))
+					continue;
+				if (result && result != offset)
+					return 0;
+				result = offset;
+			}
+		}
+		LOG("schema %s::%s: 0x%x\n", class_name, field_name, result);
+		return result;
+	}
+
 	static void reset_session(void)
 	{
 		if (game_handle)
@@ -108,6 +152,11 @@ namespace cs2
 		convars::cl_crosshairalpha = 0;
 		netvars::m_flFOVSensitivityAdjust = 0;
 		netvars::m_pGameSceneNode = 0;
+		netvars::m_Item = 0;
+		netvars::m_iItemDefinitionIndex = 0;
+		netvars::m_pAimPunchServices = 0;
+		netvars::m_unpredictableBaseTick = 0;
+		netvars::m_AttributeManager = 0;
 		netvars::m_iHealth = 0;
 		netvars::m_lifeState = 0;
 		netvars::m_iTeamNum = 0;
@@ -288,11 +337,10 @@ JZ(direct::view_angles  = get_interface(client_dll, "Source2Client0"), E1);
 
 if (vm::get_target_os() == VmOs::Linux)
 	{
-		//
-		// viewmatrix: 48 8d 05 ? ? ? ? 4c 8d 05 ? ? ? ? 48 8d 0d
-		//
-		JZ(direct::view_matrix = vm::scan_pattern_direct(game_handle, client_dll, "\x48\x8D\x05\x00\x00\x00\x00\x4C\x8D\x05\x00\x00\x00\x00\x48\x8D\x0D", "xxx????xxx????xxx", 17), E1);
-		direct::view_matrix    = vm::get_relative_address(game_handle, direct::view_matrix + 0x7, 3, 7);
+		// Linux view-projection matrix reference, validated against the installed client.
+		JZ(direct::view_matrix = vm::scan_pattern_direct(game_handle, client_dll,
+			"\xC6\x83\x00\x00\x00\x00\x01\x4C\x8D\x05", "xx??xxxxxx", 10), E1);
+		direct::view_matrix = vm::get_relative_address(game_handle, direct::view_matrix + 7, 3, 7);
 	}
 	else
 	{
@@ -335,144 +383,7 @@ if (vm::get_target_os() == VmOs::Linux)
 	LOG("direct::view_matrix    %p\n", (void *)direct::view_matrix);
 
 
-	if (vm::get_target_os() == VmOs::Linux)
-	{
-		PVOID dump_client = vm::dump_module(game_handle, client_dll, VM_MODULE_TYPE::Full);
-		if (dump_client == 0)
-		{
-			goto E1;
-		}
 
-		QWORD base = *(QWORD*)((QWORD)dump_client - 16);
-		QWORD size = *(QWORD*)((QWORD)dump_client - 8);
-		for (QWORD i = size >= 32 ? size - 32 : 0; i--;)
-		{
-			QWORD entry    = ((QWORD)dump_client + i);
-		
-			BOOL network_enable = 0;
-			{
-				QWORD ptr_to_name = read_dump<QWORD>(dump_client, entry);
-				if (ptr_to_name >= base && ptr_to_name <= (base + size))
-				{
-					ptr_to_name = read_dump<QWORD>(dump_client, (ptr_to_name - base) + (QWORD)dump_client);
-					if (ptr_to_name >= base && ptr_to_name <= (base + size))
-					{
-						if (dump_name_equals(dump_client, (const char*)(ptr_to_name - base) + (QWORD)dump_client, "MNetworkEnable"))
-						{
-							network_enable = 1;
-						}
-					}
-				}
-			}
-
-			QWORD name_ptr;
-			if (network_enable == 0)
-			{
-				name_ptr = read_dump<QWORD>(dump_client, entry);
-				if (name_ptr < base)
-				{
-					continue;
-				}
-				if (name_ptr > (base + size))
-				{
-					continue;
-				}
-			}
-			else
-			{
-				name_ptr = read_dump<QWORD>(dump_client, entry + 0x08);
-				if (name_ptr < base)
-				{
-					continue;
-				}
-				if (name_ptr > (base + size))
-				{
-					continue;
-				}
-			}
-
-			PCSTR netvar_name = (PCSTR)((name_ptr - base) + (QWORD)dump_client);
-
-			if (!netvars::m_iHealth && dump_name_equals(dump_client, netvar_name, "m_iHealth") && network_enable)
-			{
-				LOG("%s, %x\n", netvar_name, read_dump<int>(dump_client, entry + 0x08 + 0x10));
-				netvars::m_iHealth = read_dump<int>(dump_client, entry + 0x08 + 0x10);
-			}
-			else if (!netvars::m_iTeamNum && dump_name_equals(dump_client, netvar_name, "m_iTeamNum") && network_enable)
-			{
-				LOG("%s, %x\n", netvar_name, read_dump<int>(dump_client, entry + 0x08 + 0x10));
-				netvars::m_iTeamNum = read_dump<int>(dump_client, entry + 0x08 + 0x10);
-			}
-			else if (!netvars::m_hPawn && dump_name_equals(dump_client, netvar_name, "m_hPawn") && network_enable)
-			{
-				LOG("%s, %x\n", netvar_name, read_dump<int>(dump_client, entry + 0x08 + 0x10));
-				netvars::m_hPawn = read_dump<int>(dump_client, entry + 0x08 + 0x10);
-			}
-			else if (!netvars::m_lifeState && dump_name_equals(dump_client, netvar_name, "m_lifeState") && network_enable)
-			{
-				LOG("%s, %x\n", netvar_name, read_dump<int>(dump_client, entry + 0x08 + 0x10));
-				netvars::m_lifeState = read_dump<int>(dump_client, entry + 0x08 + 0x10);
-			}
-			else if (!netvars::m_vecViewOffset && dump_name_equals(dump_client, netvar_name, "m_vecViewOffset") && network_enable)
-			{
-				LOG("%s, %x\n", netvar_name, read_dump<int>(dump_client, entry + 0x08 + 0x10));
-				netvars::m_vecViewOffset = read_dump<int>(dump_client, entry + 0x08 + 0x10);
-			}
-			else if (!netvars::m_aimPunchCache && dump_name_equals(dump_client, netvar_name, "m_aimPunchCache") && network_enable)
-			{
-				LOG("%s, %x\n", netvar_name, read_dump<int>(dump_client, entry + 0x08 + 0x10));
-				netvars::m_aimPunchCache = read_dump<int>(dump_client, entry + 0x08 + 0x10);
-			}
-			else if (!netvars::m_iShotsFired && dump_name_equals(dump_client, netvar_name, "m_iShotsFired") && network_enable)
-			{
-				LOG("%s, %x\n", netvar_name, read_dump<int>(dump_client, entry + 0x08 + 0x10));
-				netvars::m_iShotsFired = read_dump<int>(dump_client, entry + 0x08 + 0x10);
-			}
-			else if (!netvars::m_flFOVSensitivityAdjust && dump_name_equals(dump_client, netvar_name, "m_flFOVSensitivityAdjust"))
-			{
-				LOG("%s, %x\n", netvar_name, read_dump<int>(dump_client, entry + 0x08));
-				netvars::m_flFOVSensitivityAdjust = read_dump<int>(dump_client, entry + 0x08);
-			}
-			else if (!netvars::m_pGameSceneNode && dump_name_equals(dump_client, netvar_name, "m_pGameSceneNode"))
-			{
-				LOG("%s, %x\n", netvar_name, read_dump<WORD>(dump_client, entry + 0x10));
-				netvars::m_pGameSceneNode = read_dump<WORD>(dump_client, entry + 0x10);
-			}
-			else if (!netvars::m_bDormant && dump_name_equals(dump_client, netvar_name, "m_bDormant"))
-			{
-				LOG("%s, %x\n", netvar_name, read_dump<int>(dump_client, entry + 0x08));
-				netvars::m_bDormant = read_dump<int>(dump_client, entry + 0x08);
-			}
-			else if (!netvars::m_modelState && dump_name_equals(dump_client, netvar_name, "m_modelState"))
-			{
-				LOG("%s, %x\n", netvar_name, read_dump<int>(dump_client, entry + 0x08));
-				netvars::m_modelState = read_dump<int>(dump_client, entry + 0x08);
-			}
-			else if (!netvars::m_vecOrigin && dump_name_equals(dump_client, netvar_name, "m_vecOrigin") && network_enable)
-			{
-				LOG("%s, %x\n", netvar_name, read_dump<int>(dump_client, entry + 0x08 + 0x10));
-				netvars::m_vecOrigin = read_dump<int>(dump_client, entry + 0x08 + 0x10);
-				if (netvars::m_vecOrigin > 0x200) netvars::m_vecOrigin = 0;
-			}
-			else if (!netvars::m_vOldOrigin && dump_name_equals(dump_client, netvar_name, "m_vOldOrigin"))
-			{
-				LOG("%s, %x\n", netvar_name, read_dump<int>(dump_client, entry + 0x08));
-				netvars::m_vOldOrigin = read_dump<int>(dump_client, entry + 0x08);
-			}
-			else if (!netvars::m_pClippingWeapon && dump_name_equals(dump_client, netvar_name, "m_pClippingWeapon"))
-			{
-				LOG("%s, %x\n", netvar_name, read_dump<int>(dump_client, entry + 0x10));
-				netvars::m_pClippingWeapon = read_dump<int>(dump_client, entry + 0x10);
-			}
-			else if (!netvars::v_angle && dump_name_equals(dump_client, netvar_name, "v_angle"))
-			{
-				LOG("%s, %x\n", netvar_name, read_dump<int>(dump_client, entry + 0x08));
-				netvars::v_angle = read_dump<int>(dump_client, entry + 0x08);
-			}
-		}
-		vm::free_module(dump_client);
-	}
-	else
 	{
 		PVOID dump_client = vm::dump_module(game_handle, client_dll, VM_MODULE_TYPE::Full);
 		if (dump_client == 0)
@@ -482,6 +393,8 @@ if (vm::get_target_os() == VmOs::Linux)
 	
 		struct Field { const char* name; int* offset; int max; bool ambiguous; };
         Field fields[] = {
+            {"m_aimPunchCache", &netvars::m_aimPunchCache},
+            {"m_pClippingWeapon", &netvars::m_pClippingWeapon},
             {"m_iHealth", &netvars::m_iHealth}, {"m_lifeState", &netvars::m_lifeState},
             {"m_iTeamNum", &netvars::m_iTeamNum}, {"m_hPlayerPawn", &netvars::m_hPawn},
             {"m_vecViewOffset", &netvars::m_vecViewOffset},
@@ -516,6 +429,14 @@ if (vm::get_target_os() == VmOs::Linux)
             if (field.ambiguous) *field.offset = 0;
             LOG("schema %s: 0x%x%s\n", field.name, *field.offset, field.ambiguous ? " (ambiguous)" : "");
         }
+        if (vm::get_target_os() == VmOs::Linux)
+        {
+            netvars::m_AttributeManager = class_field_offset(dump_client, client_dll, "C_EconEntity", "m_AttributeManager");
+            netvars::m_Item = class_field_offset(dump_client, client_dll, "C_AttributeContainer", "m_Item");
+            netvars::m_iItemDefinitionIndex = class_field_offset(dump_client, client_dll, "C_EconItemView", "m_iItemDefinitionIndex");
+            netvars::m_pAimPunchServices = class_field_offset(dump_client, client_dll, "C_CSPlayerPawn", "m_pAimPunchServices");
+            netvars::m_unpredictableBaseTick = class_field_offset(dump_client, client_dll, "CCSPlayer_AimPunchServices", "m_unpredictableBaseTick");
+        }
         vm::free_module(dump_client);
 	}
 
@@ -529,10 +450,25 @@ if (vm::get_target_os() == VmOs::Linux)
 	JZ(netvars::m_bDormant, E1);
 	JZ(netvars::m_hPawn, E1);
 	JZ(netvars::m_modelState, E1);
-	if (vm::get_target_os() == VmOs::Linux) { JZ(netvars::m_aimPunchCache, E1); }
+	if (vm::get_target_os() == VmOs::Linux)
+	{
+		JZ(netvars::m_AttributeManager, E1);
+		JZ(netvars::m_Item, E1);
+		JZ(netvars::m_iItemDefinitionIndex, E1);
+		if (!netvars::m_aimPunchCache)
+		{
+			JZ(netvars::m_pAimPunchServices, E1);
+			if (netvars::m_unpredictableBaseTick < 0x18) goto E1;
+		}
+	}
 	JZ(netvars::m_iShotsFired, E1);
 	JZ(netvars::m_vOldOrigin, E1);
-	if (vm::get_target_os() == VmOs::Linux) { JZ(netvars::m_pClippingWeapon, E1); }
+	if (vm::get_target_os() == VmOs::Linux && !netvars::m_pClippingWeapon)
+	{
+		JZ(netvars::m_pWeaponServices, E1);
+		JZ(netvars::m_hActiveWeapon, E1);
+		LOG("weapon lookup uses weapon services and active weapon handle\n");
+	}
 	JZ(netvars::v_angle, E1);
 	
 	if (vm::get_target_os() == VmOs::Windows) { JZ(netvars::m_bPawnHasDefuser, E1); }
@@ -689,8 +625,16 @@ QWORD cs2::engine::get_convar(const char *name)
 DWORD cs2::engine::get_current_ms(void)
 {
 #ifdef EC_UM_CLOCK
-    return GetTickCount();
+	return GetTickCount();
 #else
+#ifdef __linux__
+	if (vm::get_target_os() == VmOs::Linux)
+	{
+		struct timespec now{};
+		if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return 0;
+		return static_cast<DWORD>(static_cast<QWORD>(now.tv_sec) * 1000 + now.tv_nsec / 1000000);
+	}
+#endif
 	QWORD function = get_interface_function(interfaces::input, 16);
 	DWORD offset = 0, value = 0;
 	if (!function || function > ~(QWORD)0 - 2 ||
@@ -796,7 +740,7 @@ BOOL cs2::entity::has_defuser(QWORD entity)
 
 int cs2::get_crosshairalpha(void)
 {
-	return vm::read_i32(game_handle, convars::cl_crosshairalpha + 0x40);
+	return vm::read_i32(game_handle, convars::cl_crosshairalpha + (vm::get_target_os() == VmOs::Linux ? 0x58 : 0x40));
 }
 
 float cs2::mouse::get_sensitivity(void)
@@ -805,11 +749,13 @@ float cs2::mouse::get_sensitivity(void)
         const QWORD sensitivity = vm::read_i64(game_handle, convars::sensitivity_pointer);
         return sensitivity ? vm::read_float(game_handle, sensitivity + convars::sensitivity_value_offset) : 0.0f;
     }
-    return vm::read_float(game_handle, convars::sensitivity + 0x40);
+    return vm::read_float(game_handle, convars::sensitivity + (vm::get_target_os() == VmOs::Linux ? 0x58 : 0x40));
 }
 
 BOOL cs2::gamemode::is_ffa(void)
 {
+	if (vm::get_target_os() == VmOs::Linux)
+		return vm::read_i8(game_handle, convars::mp_teammates_are_enemies + 0x58) == 1;
 	return vm::read_i32(game_handle, convars::mp_teammates_are_enemies + 0x40) == 1;
 }
 
@@ -890,9 +836,17 @@ vec2 cs2::player::get_vec_punch(QWORD player)
 {
 	vec2 data{};
 
-	if (!player || !netvars::m_aimPunchCache) return data;
-    QWORD aim_punch_cache[2]{};
-	if (!vm::read(game_handle, player + netvars::m_aimPunchCache, &aim_punch_cache, sizeof(aim_punch_cache)))
+	if (!player) return data;
+	QWORD cache_address = netvars::m_aimPunchCache ? player + netvars::m_aimPunchCache : 0;
+	if (!cache_address && netvars::m_pAimPunchServices && netvars::m_unpredictableBaseTick >= 0x18)
+	{
+		const QWORD service = vm::read_i64(game_handle, player + netvars::m_pAimPunchServices);
+		if (service && service <= ~(QWORD)0 - netvars::m_unpredictableBaseTick)
+			cache_address = service + netvars::m_unpredictableBaseTick - 0x18;
+	}
+	if (!cache_address) return data;
+	QWORD aim_punch_cache[2]{};
+	if (!vm::read(game_handle, cache_address, &aim_punch_cache, sizeof(aim_punch_cache)))
 	{
 		return data;
 	}
@@ -903,9 +857,6 @@ vec2 cs2::player::get_vec_punch(QWORD player)
 	{
 		return data;
 	}
-
-	if (aimpunch_size == 129)
-		aimpunch_size = 130;
 
 	if (!vm::read(game_handle, aim_punch_cache[1] + (QWORD(aimpunch_size-1) * 12), &data, sizeof(data)))
 	{
@@ -938,9 +889,15 @@ cs2::WEAPON_CLASS cs2::player::get_weapon_class(QWORD player)
 	//
 	// C_EconEntity::m_AttributeManager + C_AttributeContainer::m_Item + C_EconItemView::m_iItemDefinitionIndex
 	//
-	const QWORD attribute_manager = convars::attribute_manager_offset ? convars::attribute_manager_offset : 0x1140;
+	const bool linux_target = vm::get_target_os() == VmOs::Linux;
+	const QWORD attribute_manager = convars::attribute_manager_offset ?
+		convars::attribute_manager_offset : (linux_target ? netvars::m_AttributeManager : 0x1140);
+	if (!attribute_manager) return cs2::WEAPON_CLASS::Invalid;
     WORD weapon_index = 0;
-    if (!vm::read(game_handle, weapon + attribute_manager + 0x50 + 0x1BA,
+    const QWORD item = linux_target ? netvars::m_Item : 0x50;
+	const QWORD definition = linux_target ? netvars::m_iItemDefinitionIndex : 0x1BA;
+	if (!item || !definition ||
+	    !vm::read(game_handle, weapon + attribute_manager + item + definition,
                   &weapon_index, sizeof(weapon_index)) || !weapon_index)
         return cs2::WEAPON_CLASS::Invalid;
 

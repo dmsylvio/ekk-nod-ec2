@@ -11,7 +11,11 @@ O projeto também serve como base para estudar detecção de trapaças. Os contr
 - Counter-Strike 2 com a build interna **14196** (Steam build **26445667**). O código verifica a build antes de usar a matriz de projeção. Atualizações do jogo podem exigir ajustes.
 - A `SDL3.dll` incluída em `projects/UM`, ao lado do executável durante a execução.
 
-## Compilar e executar
+## Windows x64
+
+Baixe **ekk-windows-x64** em **Artifacts** de uma execução bem-sucedida do [workflow Windows x64](https://github.com/dmsylvio/ekk-nod-ec2/actions/workflows/windows-x64.yml). Extraia o ZIP e execute `um.exe` mantendo `SDL3.dll` na mesma pasta.
+
+### Compilar localmente
 
 1. Abra [`projects/UM/um.sln`](projects/UM/um.sln) no Visual Studio.
 2. Selecione **Release** e **x64** e compile a solução.
@@ -57,7 +61,7 @@ A compilação **Release x64** e os testes com memória simulada foram executado
 
 ## Linux x64
 
-O [workflow Linux x64](https://github.com/dmsylvio/ekk-nod-ec2/actions/workflows/linux-x64.yml) compila e empacota o executável no GitHub Actions. Abra a execução bem-sucedida mais recente e baixe **ekk-linux-x64** em **Artifacts**. O pacote inclui a biblioteca SDL3 necessária.
+O [workflow Linux x64](https://github.com/dmsylvio/ekk-nod-ec2/actions/workflows/linux-x64.yml) compila e empacota o executável no GitHub Actions. Abra a execução bem-sucedida mais recente e baixe **ekk-linux-x64** em **Artifacts**. O pacote inclui o executável, a biblioteca SDL3 e o painel de configuração Linux.
 
 Depois de extrair o ZIP baixado do GitHub, execute:
 
@@ -67,7 +71,20 @@ cd ekk-linux-x64
 ./ekk-linux
 ```
 
-A compilação e a checagem das dependências passaram no Ubuntu 22.04. O funcionamento em jogo ainda precisa ser validado. O painel de configuração Win32 é exclusivo da build Windows.
+A sobreposição usa X11 ou XWayland. Para abrir o painel, execute `./ekk-linux --settings`. O painel usa Python 3, PyGObject e GTK 4. No Ubuntu, instale essas dependências com `sudo apt install python3-gi gir1.2-gtk-4.0`.
+
+### Permissão persistente do mouse
+
+Aim e Trigger precisam de acesso de leitura e escrita ao dispositivo de eventos do mouse. Para um **SteelSeries Rival 3 Wireless**, crie uma regra `udev` que concede acesso à sessão local ativa:
+
+```sh
+sudo tee /etc/udev/rules.d/71-ekk-mouse.rules >/dev/null <<'EOF'
+SUBSYSTEM=="input", KERNEL=="event*", ENV{ID_INPUT_MOUSE}=="1", ENV{ID_SERIAL}=="SteelSeries_SteelSeries_Rival_3_Wireless", TAG+="uaccess"
+EOF
+sudo udevadm control --reload-rules
+```
+
+Reconecte o receptor USB e execute o EKK como seu usuário normal. Para outro modelo, consulte `udevadm info --query=property --name=/dev/input/by-id/<dispositivo>-event-mouse` e substitua o valor de `ID_SERIAL` na regra.
 
 ## Estrutura do repositório
 
