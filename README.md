@@ -55,6 +55,20 @@ A compilação **Release x64** e os testes com memória simulada foram executado
 - Se a inicialização falhar, consulte as mensagens `[EC]` no console. `CS2 initialization complete` indica que o módulo foi inicializado.
 - Se a sobreposição não aparecer, confira o estado de **Wall (Toggle)** e o modo de exibição do jogo.
 
+## Linux x64
+
+O [workflow Linux x64](https://github.com/dmsylvio/ekk-nod-ec2/actions/workflows/linux-x64.yml) compila e empacota o executável no GitHub Actions. Abra a execução bem-sucedida mais recente e baixe **ekk-linux-x64** em **Artifacts**. O pacote inclui a biblioteca SDL3 necessária.
+
+Depois de extrair o ZIP baixado do GitHub, execute:
+
+```sh
+tar -xzf ekk-linux-x64.tar.gz
+cd ekk-linux-x64
+./ekk-linux
+```
+
+A compilação e a checagem das dependências passaram no Ubuntu 22.04. O funcionamento em jogo ainda precisa ser validado. O painel de configuração Win32 é exclusivo da build Windows.
+
 ## Estrutura do repositório
 
 | Pasta | Conteúdo |
