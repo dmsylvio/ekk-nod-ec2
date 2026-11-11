@@ -69,33 +69,50 @@ int main()
     assert(cs2::node::get_dormant(0));
 
     cs2::interfaces::cvar = 3000;
-    put<QWORD>(3064, 4000);
-    put<DWORD>(3160, 1);
+    // Reproduce the reported garbage in the old field; it must not be used.
+    put<DWORD>(3160, 3863680960u);
+    put<WORD>(3090, 0xFFFF); // Adjacent bytes are not part of the count.
+    put<QWORD>(3080, 4000);
+    put<WORD>(3074, 0x1100);
+    put<WORD>(3072, 1);
     put<QWORD>(4000, 5000);
     put<QWORD>(5000, 6000);
     char longest[120];
     memset(longest, 'a', 119); longest[119] = 0;
     memcpy(memory + 6000, longest, sizeof(longest));
     assert(cs2::engine::get_convar(longest) == 5000);
+    // Replay the reported header, relocating only the table pointer into the mock.
+    put<QWORD>(3064, 0x000008480000033Cull);
+    put<QWORD>(3072, 0x0000000011001023ull);
+    put<QWORD>(3080, 4000);
+    put<QWORD>(3088, 0x1023FFFF10220000ull);
+    assert(cs2::engine::get_convar(longest) == 5000);
+    // Reject impossible sizes before walking entries.
+    put<WORD>(3074, 1);
+    reads = 0;
+    assert(cs2::engine::get_convar(longest) == 0 && reads == 3);
+    put<WORD>(3072, 1);
+    put<WORD>(3074, 0x8002); // External storage, capacity two.
+    assert(cs2::engine::get_convar(longest) == 5000);
     char oversized[121];
     memset(oversized, 'a', 120); oversized[120] = 0;
     assert(cs2::engine::get_convar(oversized) == 0);
     assert(cs2::engine::get_convar(nullptr) == 0);
     // Empty slots must not prevent a later matching convar from being found.
-    put<DWORD>(3160, 2); put<QWORD>(4000, 0); put<QWORD>(4016, 5000);
+    put<WORD>(3072, 2); put<QWORD>(4000, 0); put<QWORD>(4016, 5000);
     assert(cs2::engine::get_convar(longest) == 5000);
     // A shorter preceding name may end at the last readable byte.
     put<QWORD>(4000, 5100); put<QWORD>(5100, sizeof(memory) - 2);
     memory[sizeof(memory) - 2] = 'a'; memory[sizeof(memory) - 1] = 0;
     assert(cs2::engine::get_convar(longest) == 5000);
-    put<DWORD>(3160, 1); put<QWORD>(4000, 5000);
+    put<WORD>(3072, 1); put<QWORD>(4000, 5000);
     memory[6000 + 119] = 'b';
     assert(cs2::engine::get_convar(longest) == 0);
     put<QWORD>(5000, sizeof(memory));
     assert(cs2::engine::get_convar(longest) == 0);
-    put<DWORD>(3160, ~DWORD(0));
+    put<WORD>(3072, 0);
     reads = 0;
-    assert(cs2::engine::get_convar(longest) == 0 && reads == 2);
+    assert(cs2::engine::get_convar(longest) == 0 && reads == 3);
 
     put<DWORD>(7000 + 0xD0, 1);
     put<QWORD>(7000 + 0xD8, 8000);
@@ -119,3 +136,15 @@ int main()
     cs2::reset_session();
     assert(closes == 1);
 }
+
+#ifdef _WIN32
+// MSVC needs definitions even for the unused initialization functions.
+// Any unexpected call fails the isolated test instead of accessing a process.
+BOOL vm::process_exists(PCSTR) { assert(false); return 0; }
+vm_handle vm::open_process_ex(PCSTR, PCSTR) { assert(false); return nullptr; }
+BOOL vm::running(vm_handle) { assert(false); return 0; }
+QWORD vm::get_module(vm_handle, PCSTR) { assert(false); return 0; }
+PVOID vm::dump_module(vm_handle, QWORD, VM_MODULE_TYPE) { assert(false); return nullptr; }
+void vm::free_module(PVOID) { assert(false); }
+QWORD vm::scan_pattern_direct(vm_handle, QWORD, PCSTR, PCSTR, DWORD) { assert(false); return 0; }
+#endif

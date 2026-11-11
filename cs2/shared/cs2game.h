@@ -24,7 +24,13 @@ namespace cs2
 //
 namespace client
 {
-	extern void mouse_move(int x, int y);
+	#ifdef EC_UM_CLOCK
+    int choose_aim_bone();
+    bool aim_pressed();
+    bool trigger_pressed();
+    bool overlay_enabled();
+#endif
+    extern void mouse_move(int x, int y);
 	extern void mouse1_down(void);
 	extern void mouse1_up(void);
 	extern void DrawRect(void *hwnd, int x, int y, int w, int h, unsigned char r, unsigned char g, unsigned char b);
@@ -48,4 +54,3 @@ namespace cs2
 
 
 #endif // CS2GAME_H
-

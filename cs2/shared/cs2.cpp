@@ -30,6 +30,7 @@ namespace cs2
 	namespace convars
 	{
 		static QWORD sensitivity;
+        static QWORD sensitivity_pointer;
 		static QWORD mp_teammates_are_enemies;
 		static QWORD cl_crosshairalpha;
 	}
@@ -48,6 +49,7 @@ namespace cs2
 		static int m_modelState = 0;
 		static int m_aimPunchCache = 0;
 		static int m_iShotsFired = 0;
+        static int m_iIDEntIndex = 0;
 		static int m_vOldOrigin = 0;
 		static int m_pClippingWeapon = 0;
 		static int v_angle = 0;
@@ -97,6 +99,7 @@ namespace cs2
 		direct::view_matrix = 0;
 		direct::button_state = 0;
 		convars::sensitivity = 0;
+        convars::sensitivity_pointer = 0;
 		convars::mp_teammates_are_enemies = 0;
 		convars::cl_crosshairalpha = 0;
 		netvars::m_flFOVSensitivityAdjust = 0;
@@ -111,6 +114,7 @@ namespace cs2
 		netvars::m_modelState = 0;
 		netvars::m_aimPunchCache = 0;
 		netvars::m_iShotsFired = 0;
+        netvars::m_iIDEntIndex = 0;
 		netvars::m_vOldOrigin = 0;
 		netvars::m_pClippingWeapon = 0;
 		netvars::v_angle = 0;
@@ -176,7 +180,7 @@ static BOOL cs2::initialize(void)
 	}
 	reset_session();
 
-	// Verificar se o processo "cs2.exe" está em execução
+	// Verificar se o processo "cs2.exe" estï¿½ em execuï¿½ï¿½o
 	if (!vm::process_exists(get_process_name()))
 	{
 		LOG("CS2 process not found - process check failed\n");
@@ -273,25 +277,19 @@ static BOOL cs2::initialize(void)
 	}
 	else
 	{
-		//
-		// viewmatrix: 48 63 c2 48 8d 0d ? ? ? ? 48 c1
-		// Fallback pattern: 48 8d 0d ? ? ? ? 48 8b
-		//
-		direct::view_matrix = vm::scan_pattern_direct(game_handle, client_dll, "\x48\x63\xc2\x48\x8d\x0d\x00\x00\x00\x00\x48\xc1", "xxxxxx????xx", 12);
-		
-		// Se o primeiro padrão falhar, tenta o padrão alternativo
-		if (direct::view_matrix == 0)
-		{
-			JZ(direct::view_matrix = vm::scan_pattern_direct(game_handle, client_dll, "\x48\x8D\x0D\x00\x00\x00\x00\x48\x8B", "xxx????xx", 9), E1);
-			direct::view_matrix = vm::get_relative_address(game_handle, direct::view_matrix, 3, 7);
-		}
-		else
-		{
-			direct::view_matrix = vm::get_relative_address(game_handle, direct::view_matrix + 0x03, 3, 7);
-		}
-	}
+        // Windows CS2 build 14196. The older broad pattern can resolve unrelated data.
+        const QWORD engine = vm::get_module(game_handle, get_engine_name());
+        if (!engine || vm::read_i32(game_handle, engine + 0x6BA028) != 14196)
+        {
+            LOG("Unsupported Windows build for the view matrix\n");
+            goto E1;
+        }
+        direct::view_matrix = client_dll + 0x2570250;
+        direct::view_angles = client_dll + 0x2581098;
+        convars::sensitivity_pointer = client_dll + 0x2567C48;
+    }
 
-	if (!direct::view_matrix)
+    if (!direct::view_matrix)
 	{
 		LOG("CS2 view-matrix discovery failed after the available lookup strategies. A zero result does not distinguish dump/read failure from no pattern match.\n");
 		goto E1;
@@ -459,175 +457,43 @@ static BOOL cs2::initialize(void)
 			goto E1;
 		}
 	
-		QWORD dos_header = (QWORD)dump_client;
-		QWORD nt_header = (QWORD)read_dump<DWORD>(dump_client, dos_header + 0x03C) + dos_header;
-		WORD  machine = read_dump<WORD>(dump_client, nt_header + 0x4);
-
-		QWORD section_header = machine == 0x8664 ?
-			nt_header + 0x0108 :
-			nt_header + 0x00F8;
-
-		for (WORD i = 0; i < read_dump<WORD>(dump_client, nt_header + 0x06); i++) {
-			QWORD section = section_header + ((QWORD)i * 40);
-			PCSTR name = (PCSTR)section;
-
-			if (!dump_name_equals(dump_client, name, ".data"))
-			{
-				continue;
-			}
-			
-			DWORD section_size = read_dump<DWORD>(dump_client, section + 0x08);
-			DWORD section_addr = read_dump<DWORD>(dump_client, section + 0x0C);
-
-			QWORD image_size = *(QWORD*)(dos_header - 8);
-			if (section_addr > image_size || section_size > image_size - section_addr) { vm::free_module(dump_client); goto E1; }
-			for (QWORD j = section_addr; j + 32 <= QWORD(section_addr) + section_size; j += sizeof(QWORD))
-			{	
-				BOOL network_enable = 0;
-				{
-					QWORD ptr_to_name = read_dump<QWORD>(dump_client, dos_header + j);
-					if (ptr_to_name >= client_dll && ptr_to_name <= (client_dll + *(QWORD*)(dos_header - 8)))
-					{
-						ptr_to_name = read_dump<QWORD>(dump_client, (ptr_to_name - client_dll) + dos_header);
-						if (ptr_to_name >= client_dll && ptr_to_name <= (client_dll + *(QWORD*)(dos_header - 8)))
-						{
-							if (dump_name_equals(dump_client, (const char*)(ptr_to_name - client_dll) + dos_header, "MNetworkEnable"))
-							{
-								network_enable = 1;
-							}
-						}
-					}
-				}
-
-				QWORD ptr_to_name;
-				if (network_enable == 0)
-				{
-					ptr_to_name = read_dump<QWORD>(dump_client, dos_header + j + 0x00);
-					if (ptr_to_name < client_dll)
-					{
-						continue;
-					}	
-					if (ptr_to_name > (client_dll + *(QWORD*)(dos_header - 8)))
-					{
-						continue;
-					}
-				}
-				else
-				{
-					ptr_to_name = read_dump<QWORD>(dump_client, dos_header + j + 0x08);
-					if (ptr_to_name < client_dll)
-					{
-						continue;
-					}	
-					if (ptr_to_name > (client_dll + *(QWORD*)(dos_header - 8)))
-					{
-						continue;
-					}
-				}
-
-				PCSTR netvar_name = (PCSTR)((ptr_to_name - client_dll) + dos_header);
-
-				if (!netvars::m_iHealth && dump_name_equals(dump_client, netvar_name, "m_iHealth") && network_enable)
-				{
-					LOG("%s, %x\n", netvar_name, read_dump<int>(dump_client, dos_header + j + 0x08 + 0x10));
-					netvars::m_iHealth = read_dump<int>(dump_client, dos_header + j + 0x08 + 0x10);
-				}
-				else if (!netvars::m_iTeamNum && dump_name_equals(dump_client, netvar_name, "m_iTeamNum") && network_enable)
-				{
-					LOG("%s, %x\n", netvar_name, read_dump<int>(dump_client, dos_header + j + 0x08 + 0x10));
-					netvars::m_iTeamNum = read_dump<int>(dump_client, dos_header + j + 0x08 + 0x10);
-				}
-				else if (!netvars::m_hPawn && dump_name_equals(dump_client, netvar_name, "m_hPawn") && network_enable)
-				{
-					LOG("%s, %x\n", netvar_name, read_dump<int>(dump_client, dos_header + j + 0x08 + 0x10));
-					netvars::m_hPawn = read_dump<int>(dump_client, dos_header + j + 0x08 + 0x10);
-				}
-				else if (!netvars::m_lifeState && dump_name_equals(dump_client, netvar_name, "m_lifeState") && network_enable)
-				{
-					LOG("%s, %x\n", netvar_name, read_dump<int>(dump_client, dos_header + j + 0x08 + 0x10));
-					netvars::m_lifeState = read_dump<int>(dump_client, dos_header + j + 0x08 + 0x10);
-				}
-				else if (!netvars::m_vecViewOffset && dump_name_equals(dump_client, netvar_name, "m_vecViewOffset") && network_enable)
-				{
-					LOG("%s, %x\n", netvar_name, read_dump<int>(dump_client, dos_header + j + 0x08 + 0x10));
-					netvars::m_vecViewOffset = read_dump<int>(dump_client, dos_header + j + 0x08 + 0x10);
-				}
-				else if (!netvars::m_aimPunchCache && dump_name_equals(dump_client, netvar_name, "m_aimPunchCache") && network_enable)
-				{
-					LOG("%s, %x\n", netvar_name, read_dump<int>(dump_client, dos_header + j + 0x08 + 0x10));
-					netvars::m_aimPunchCache = read_dump<int>(dump_client, dos_header + j + 0x08 + 0x10);
-				}
-				else if (!netvars::m_iShotsFired && dump_name_equals(dump_client, netvar_name, "m_iShotsFired") && network_enable)
-				{
-					LOG("%s, %x\n", netvar_name, read_dump<int>(dump_client, dos_header + j + 0x08 + 0x10));
-					netvars::m_iShotsFired = read_dump<int>(dump_client, dos_header + j + 0x08 + 0x10);
-				}
-				else if (!netvars::m_flFOVSensitivityAdjust && dump_name_equals(dump_client, netvar_name, "m_flFOVSensitivityAdjust"))
-				{
-					LOG("%s, %x\n", netvar_name, read_dump<int>(dump_client, dos_header + j + 0x08));
-					netvars::m_flFOVSensitivityAdjust = read_dump<int>(dump_client, dos_header + j + 0x08);
-				}
-				else if (!netvars::m_pGameSceneNode && dump_name_equals(dump_client, netvar_name, "m_pGameSceneNode"))
-				{
-					LOG("%s, %x\n", netvar_name, read_dump<WORD>(dump_client, dos_header + j + 0x10));
-					netvars::m_pGameSceneNode = read_dump<WORD>(dump_client, dos_header + j + 0x10);
-				}
-				else if (!netvars::m_bDormant && dump_name_equals(dump_client, netvar_name, "m_bDormant"))
-				{
-					LOG("%s, %x\n", netvar_name, read_dump<int>(dump_client, dos_header + j + 0x10));
-					netvars::m_bDormant = read_dump<int>(dump_client, dos_header + j + 0x10);
-				}
-				else if (!netvars::m_modelState && dump_name_equals(dump_client, netvar_name, "m_modelState"))
-				{
-					LOG("%s, %x\n", netvar_name, read_dump<int>(dump_client, dos_header + j + 0x10));
-					netvars::m_modelState = read_dump<int>(dump_client, dos_header + j + 0x10);
-				}
-				else if (!netvars::m_vecOrigin && dump_name_equals(dump_client, netvar_name, "m_vecOrigin") && network_enable)
-				{
-					LOG("%s, %x\n", netvar_name, read_dump<int>(dump_client, dos_header + j + 0x08 + 0x10));
-					netvars::m_vecOrigin = read_dump<int>(dump_client, dos_header + j + 0x08 + 0x10);
-
-					if (netvars::m_vecOrigin > 0x200) netvars::m_vecOrigin = 0;
-				}
-				else if (!netvars::m_vOldOrigin && dump_name_equals(dump_client, netvar_name, "m_vOldOrigin"))
-				{
-					LOG("%s, %x\n", netvar_name, read_dump<int>(dump_client, dos_header + j + 0x10));
-					netvars::m_vOldOrigin = read_dump<int>(dump_client, dos_header + j + 0x10);
-				}
-				else if (!netvars::m_pClippingWeapon && dump_name_equals(dump_client, netvar_name, "m_pClippingWeapon"))
-				{
-					LOG("%s, %x\n", netvar_name, read_dump<int>(dump_client, dos_header + j + 0x10));
-					netvars::m_pClippingWeapon = read_dump<int>(dump_client, dos_header + j + 0x10);
-				}
-				else if (!netvars::v_angle && dump_name_equals(dump_client, netvar_name, "v_angle"))
-				{
-					LOG("%s, %x\n", netvar_name, read_dump<int>(dump_client, dos_header + j + 0x10));
-					netvars::v_angle = read_dump<int>(dump_client, dos_header + j + 0x10);
-				}
-				else if (!netvars::m_bIsDefusing && network_enable && dump_name_equals(dump_client, netvar_name, "m_bIsDefusing"))
-				{
-					LOG("%s, %x\n", netvar_name, read_dump<int>(dump_client, dos_header + j + 0x08 + 0x10));
-					netvars::m_bIsDefusing = read_dump<int>(dump_client, dos_header + j + 0x08 + 0x10);
-				}
-				else if (!netvars::m_bPawnHasDefuser && network_enable && dump_name_equals(dump_client, netvar_name, "m_bPawnHasDefuser"))
-				{
-					LOG("%s, %x\n", netvar_name, read_dump<int>(dump_client, dos_header + j + 0x08 + 0x10));
-					netvars::m_bPawnHasDefuser = read_dump<int>(dump_client, dos_header + j + 0x08 + 0x10);
-				}
-				else if (!netvars::m_hActiveWeapon && dump_name_equals(dump_client, netvar_name, "m_hActiveWeapon"))
-				{
-					LOG("%s, %x\n", netvar_name, read_dump<int>(dump_client, dos_header + j + 0x08 + 0x10));
-					netvars::m_hActiveWeapon = read_dump<int>(dump_client, dos_header + j + 0x08 + 0x10);
-				}
-				else if (
-					(netvars::m_pWeaponServices < 0x1000 || netvars::m_pWeaponServices > 0x2000) &&
-					dump_name_equals(dump_client, netvar_name, "m_pWeaponServices"))
-				{
-					netvars::m_pWeaponServices = read_dump<int>(dump_client, dos_header + j + 0x10);
-				}
-			}
-		}
-		vm::free_module(dump_client);
+		struct Field { const char* name; int* offset; int max; bool ambiguous; };
+        Field fields[] = {
+            {"m_iHealth", &netvars::m_iHealth}, {"m_lifeState", &netvars::m_lifeState},
+            {"m_iTeamNum", &netvars::m_iTeamNum}, {"m_hPlayerPawn", &netvars::m_hPawn},
+            {"m_vecViewOffset", &netvars::m_vecViewOffset},
+            {"m_vecOrigin", &netvars::m_vecOrigin, 0x200},
+            {"m_iShotsFired", &netvars::m_iShotsFired},
+            {"m_iIDEntIndex", &netvars::m_iIDEntIndex},
+            {"m_flFOVSensitivityAdjust", &netvars::m_flFOVSensitivityAdjust},
+            {"m_pGameSceneNode", &netvars::m_pGameSceneNode},
+            {"m_bDormant", &netvars::m_bDormant}, {"m_modelState", &netvars::m_modelState},
+            {"m_vOldOrigin", &netvars::m_vOldOrigin}, {"v_angle", &netvars::v_angle},
+            {"m_bPawnHasDefuser", &netvars::m_bPawnHasDefuser},
+            {"m_hActiveWeapon", &netvars::m_hActiveWeapon},
+            {"m_pWeaponServices", &netvars::m_pWeaponServices}
+        };
+        const QWORD local = (QWORD)dump_client;
+        QWORD size = 0;
+        memcpy(&size, (BYTE*)dump_client - 8, sizeof(size));
+        for (QWORD pos = 0; size >= 32 && pos <= size - 32; pos += 8) {
+            const QWORD name = read_dump<QWORD>(dump_client, local + pos);
+            if (name < client_dll || name - client_dll >= size) continue;
+            const int offset = read_dump<int>(dump_client, local + pos + 0x10);
+            if (offset <= 0 || offset > 0x10000) continue;
+            if (read_dump<QWORD>(dump_client, local + pos + 8) < 0x10000) continue;
+            for (auto& field : fields) {
+                if ((field.max && offset > field.max) ||
+                    !dump_name_equals(dump_client, (PCSTR)(local + (name - client_dll)), field.name)) continue;
+                if (*field.offset && *field.offset != offset) field.ambiguous = true;
+                *field.offset = offset;
+            }
+        }
+        for (auto& field : fields) {
+            if (field.ambiguous) *field.offset = 0;
+            LOG("schema %s: 0x%x%s\n", field.name, *field.offset, field.ambiguous ? " (ambiguous)" : "");
+        }
+        vm::free_module(dump_client);
 	}
 
 	JZ(netvars::m_flFOVSensitivityAdjust, E1);
@@ -640,12 +506,12 @@ static BOOL cs2::initialize(void)
 	JZ(netvars::m_bDormant, E1);
 	JZ(netvars::m_hPawn, E1);
 	JZ(netvars::m_modelState, E1);
-	JZ(netvars::m_aimPunchCache, E1);
+	if (vm::get_target_os() == VmOs::Linux) { JZ(netvars::m_aimPunchCache, E1); }
 	JZ(netvars::m_iShotsFired, E1);
 	JZ(netvars::m_vOldOrigin, E1);
-	JZ(netvars::m_pClippingWeapon, E1);
+	if (vm::get_target_os() == VmOs::Linux) { JZ(netvars::m_pClippingWeapon, E1); }
 	JZ(netvars::v_angle, E1);
-	if (vm::get_target_os() == VmOs::Windows) { JZ(netvars::m_bIsDefusing, E1); }
+	
 	if (vm::get_target_os() == VmOs::Windows) { JZ(netvars::m_bPawnHasDefuser, E1); }
 	if (vm::get_target_os() == VmOs::Windows) { JZ(netvars::m_hActiveWeapon, E1); }
 	if (vm::get_target_os() == VmOs::Windows) { JZ(netvars::m_pWeaponServices, E1); }
@@ -744,18 +610,23 @@ QWORD cs2::engine::get_convar(const char *name)
 	}
 	QWORD name_length = 0;
 	while (name_length < 120 && name[name_length]) ++name_length;
-	if (!name_length || name_length >= 120 || interfaces::cvar > ~(QWORD)0 - 160) {
+	if (!name_length || name_length >= 120 || interfaces::cvar > ~(QWORD)0 - 0x58) {
 		LOG("convar lookup: invalid name length or interface address\n"); return 0;
 	}
-	QWORD objs = 0; DWORD count = 0;
-	const DWORD max_convars = 65536;
-	if (!vm::read(game_handle, interfaces::cvar + 64, &objs, sizeof(objs))) {
+	QWORD objs = 0; WORD count = 0, allocated = 0;
+	// Windows build 26445667: CUtlLeanVector header at +0x48.
+    // uint16 count, uint16 allocation flags/capacity, aligned element pointer.
+	if (!vm::read(game_handle, interfaces::cvar + 0x50, &objs, sizeof(objs))) {
 		LOG("convar [%s]: table pointer read failed\n", name); return 0;
 	}
-	if (!vm::read(game_handle, interfaces::cvar + 160, &count, sizeof(count))) {
+	if (!vm::read(game_handle, interfaces::cvar + 0x48, &count, sizeof(count))) {
 		LOG("convar [%s]: count read failed\n", name); return 0;
 	}
-	if (!objs || count > max_convars || objs > ~(QWORD)0 - QWORD(count) * 16) {
+	if (!vm::read(game_handle, interfaces::cvar + 0x4A, &allocated, sizeof(allocated))) {
+        LOG("convar [%s]: capacity read failed\n", name); return 0;
+    }
+    const DWORD capacity = allocated & 0x7FFF; // CUtlLeanVector external-buffer flag.
+    if (!objs || !count || count > capacity || objs > ~(QWORD)0 - QWORD(count) * 16) {
 		LOG("convar [%s]: invalid table metadata (count=%u, table_present=%d)\n", name, (unsigned)count, objs != 0); return 0;
 	}
 	DWORD empty = 0;
@@ -782,7 +653,11 @@ QWORD cs2::engine::get_convar(const char *name)
 			if (to_lower_imp(ch) != to_lower_imp((BYTE)name[n])) { matches = false; break; }
 			if (!ch) break;
 		}
-		if (matches) return entry;
+		if (matches) {
+            LOG("convar [%s]: found (count=%u, capacity=%u, index=%u)\n",
+                name, (unsigned)count, (unsigned)capacity, (unsigned)i);
+            return entry;
+        }
 	}
 	LOG("convar [%s]: not found (count=%u, empty=%u); table layout compatibility is not verified\n", name, (unsigned)count, (unsigned)empty);
 	return 0;
@@ -790,6 +665,9 @@ QWORD cs2::engine::get_convar(const char *name)
 
 DWORD cs2::engine::get_current_ms(void)
 {
+#ifdef EC_UM_CLOCK
+    return GetTickCount();
+#else
 	QWORD function = get_interface_function(interfaces::input, 16);
 	DWORD offset = 0, value = 0;
 	if (!function || function > ~(QWORD)0 - 2 ||
@@ -798,6 +676,7 @@ DWORD cs2::engine::get_current_ms(void)
 	    !vm::read(game_handle, interfaces::input + offset, &value, sizeof(value)))
 		return 0;
 	return value;
+#endif
 }
 
 vec2 cs2::engine::get_viewangles(void)
@@ -831,7 +710,18 @@ QWORD cs2::entity::get_client_entity(int index)
 	if (v2 == 0)
 		return 0;
 
-	return vm::read_i64(game_handle, (QWORD)(120 * (index & 0x1FF) + v2));
+	    const QWORD strides[] = {0x70, 0x78};
+    for (QWORD stride : strides)
+    {
+        const QWORD delta = stride * (index & 0x1FF);
+        if (v2 > ~QWORD(0) - delta - 0x14) continue;
+        const QWORD identity = v2 + delta;
+        DWORD handle = 0;
+        if (vm::read(game_handle, identity + 0x10, &handle, sizeof(handle)) &&
+            handle != ~DWORD(0) && (handle & 0x7FFF) == DWORD(index))
+            return vm::read_i64(game_handle, identity);
+    }
+    return 0;
 }
 
 BOOL cs2::entity::is_player(QWORD controller)
@@ -867,18 +757,12 @@ QWORD cs2::entity::get_player(QWORD controller)
 	// 5DC offset might be changing in time
 	// 8B 91 ? 05 00 00 83
 	//
-	DWORD v1 = vm::read_i32(game_handle, controller + netvars::m_hPawn);
-	if (v1 == (DWORD)(-1))
-	{
-		return 0;
-	}
-
-	QWORD v2 = vm::read_i64(game_handle, interfaces::player + 8 * ((QWORD)(v1 & 0x7FFF) >> 9));
-	if (v2 == 0)
-	{
-		return 0;
-	}
-	return vm::read_i64(game_handle, v2 + 120 * (v1 & 0x1FF));
+	DWORD handle = 0;
+    if (!controller || !netvars::m_hPawn ||
+        !vm::read(game_handle, controller + netvars::m_hPawn, &handle, sizeof(handle)) ||
+        !handle || handle == ~DWORD(0))
+        return 0;
+    return get_client_entity(handle & 0x7FFF);
 }
 
 BOOL cs2::entity::has_defuser(QWORD entity)
@@ -894,7 +778,11 @@ int cs2::get_crosshairalpha(void)
 
 float cs2::mouse::get_sensitivity(void)
 {
-	return vm::read_float(game_handle, convars::sensitivity + 0x40);
+	if (convars::sensitivity_pointer) {
+        const QWORD sensitivity = vm::read_i64(game_handle, convars::sensitivity_pointer);
+        return sensitivity ? vm::read_float(game_handle, sensitivity + 0x58) : 0.0f;
+    }
+    return vm::read_float(game_handle, convars::sensitivity + 0x40);
 }
 
 BOOL cs2::gamemode::is_ffa(void)
@@ -922,12 +810,15 @@ DWORD cs2::player::get_health(QWORD player)
 
 DWORD cs2::player::get_team_num(QWORD player)
 {
-	return vm::read_i32(game_handle, player + netvars::m_iTeamNum);
+	return vm::read_i8(game_handle, player + netvars::m_iTeamNum);
 }
 
 int cs2::player::get_life_state(QWORD player)
 {
-	return vm::read_i32(game_handle, player + netvars::m_lifeState);
+	BYTE state = 0;
+    if (!player || !netvars::m_lifeState ||
+        !vm::read(game_handle, player + netvars::m_lifeState, &state, sizeof(state))) return -1;
+    return state;
 }
 
 vec3 cs2::player::get_origin(QWORD player)
@@ -952,6 +843,16 @@ vec3 cs2::player::get_eye_position(QWORD player)
 	return origin;
 }
 
+QWORD cs2::player::get_crosshair_target(QWORD player)
+{
+    int index = -1;
+    if (!player || !netvars::m_iIDEntIndex ||
+        !vm::read(game_handle, player + netvars::m_iIDEntIndex, &index, sizeof(index)) ||
+        index <= 0 || index > 0x7FFF)
+        return 0;
+    return entity::get_client_entity(index);
+}
+
 DWORD cs2::player::get_shots_fired(QWORD player)
 {
 	return vm::read_i32(game_handle, player + netvars::m_iShotsFired);
@@ -966,7 +867,8 @@ vec2 cs2::player::get_vec_punch(QWORD player)
 {
 	vec2 data{};
 
-	QWORD aim_punch_cache[2]{};
+	if (!player || !netvars::m_aimPunchCache) return data;
+    QWORD aim_punch_cache[2]{};
 	if (!vm::read(game_handle, player + netvars::m_aimPunchCache, &aim_punch_cache, sizeof(aim_punch_cache)))
 	{
 		return data;
@@ -992,6 +894,7 @@ vec2 cs2::player::get_vec_punch(QWORD player)
 
 vec2 cs2::player::get_viewangle(QWORD player)
 {
+    if (convars::sensitivity_pointer) return engine::get_viewangles();
 	vec2 value{};
 	if (!vm::read(game_handle, player + netvars::v_angle, &value, sizeof(value)))
 	{
@@ -1002,7 +905,7 @@ vec2 cs2::player::get_viewangle(QWORD player)
 
 cs2::WEAPON_CLASS cs2::player::get_weapon_class(QWORD player)
 {
-	QWORD weapon = vm::read_i64(game_handle, player + netvars::m_pClippingWeapon);
+	QWORD weapon = netvars::m_pClippingWeapon ? vm::read_i64(game_handle, player + netvars::m_pClippingWeapon) : get_weapon_address(player);
 
 	if (weapon == 0)
 	{
@@ -1012,7 +915,11 @@ cs2::WEAPON_CLASS cs2::player::get_weapon_class(QWORD player)
 	//
 	// C_EconEntity::m_AttributeManager + C_AttributeContainer::m_Item + C_EconItemView::m_iItemDefinitionIndex
 	//
-	WORD weapon_index = vm::read_i16(game_handle, weapon + 0x1140 + 0x50 + 0x1BA);
+	const QWORD attribute_manager = convars::sensitivity_pointer ? 0x1290 : 0x1140;
+    WORD weapon_index = 0;
+    if (!vm::read(game_handle, weapon + attribute_manager + 0x50 + 0x1BA,
+                  &weapon_index, sizeof(weapon_index)) || !weapon_index)
+        return cs2::WEAPON_CLASS::Invalid;
 
 	/* knife */
 	{
@@ -1102,7 +1009,10 @@ QWORD cs2::player::get_weapon_address(QWORD player)
 	if (!weapon_services)
 		return 0;
 
-	int index = vm::read_i32(game_handle, weapon_services + netvars::m_hActiveWeapon) & 0xFFF;
+	DWORD handle = 0;
+    if (!vm::read(game_handle, weapon_services + netvars::m_hActiveWeapon, &handle, sizeof(handle)) ||
+        !handle || handle == ~DWORD(0)) return 0;
+    int index = handle & 0x7FFF;
 	return cs2::entity::get_client_entity(index);
 }
 
@@ -1131,7 +1041,7 @@ BOOL cs2::player::is_valid(QWORD player, QWORD node)
 	}
 
 	int player_lifestate = get_life_state(player);
-	if (player_lifestate != 256)
+	if (player_lifestate != 0)
 	{
 		return 0;
 	}
@@ -1261,4 +1171,3 @@ QWORD cs2::get_interface_function(QWORD interface_address, DWORD index)
 		return 0;
 	return function;
 }
-

@@ -112,6 +112,7 @@ namespace cs2
 		float get_vec_view(QWORD player);
 		vec3  get_eye_position(QWORD player);
 		DWORD get_shots_fired(QWORD player);
+        QWORD get_crosshair_target(QWORD player);
 		float get_fov_multipler(QWORD player);
 		vec2  get_vec_punch(QWORD player);
 		vec2  get_viewangle(QWORD player);
@@ -134,4 +135,3 @@ namespace cs2
 }
 
 #endif /* cs2.h */
-

@@ -6,11 +6,10 @@ void client::mouse_move(int, int) { ++movements; }
 DWORD cs2::engine::get_current_ms() { return 7; }
 int main() {
     cs2::features::mouse_down_ms = 100;
-    cs2::features::event_state = 1;
+    cs2::features::trigger_target = 42;
     cs2::features::reset();
-    assert(releases == 1 && !cs2::features::event_state && !cs2::features::mouse_down_ms);
+    assert(releases == 1 && !cs2::features::trigger_target && !cs2::features::mouse_down_ms);
     cs2::features::reset(); assert(releases == 1);
-    cs2::features::mouse_up_ms = 200;
     cs2::features::reset(); assert(releases == 1);
     assert(random_number(20, 10) == 20);
     assert(random_number(0, ~DWORD(0)) == 7);
