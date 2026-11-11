@@ -31,6 +31,8 @@ namespace cs2
 	{
 		static QWORD sensitivity;
         static QWORD sensitivity_pointer;
+        static DWORD sensitivity_value_offset;
+        static DWORD attribute_manager_offset;
 		static QWORD mp_teammates_are_enemies;
 		static QWORD cl_crosshairalpha;
 	}
@@ -100,6 +102,8 @@ namespace cs2
 		direct::button_state = 0;
 		convars::sensitivity = 0;
         convars::sensitivity_pointer = 0;
+        convars::sensitivity_value_offset = 0;
+        convars::attribute_manager_offset = 0;
 		convars::mp_teammates_are_enemies = 0;
 		convars::cl_crosshairalpha = 0;
 		netvars::m_flFOVSensitivityAdjust = 0;
@@ -180,15 +184,14 @@ static BOOL cs2::initialize(void)
 	}
 	reset_session();
 
-	// Verificar se o processo "cs2.exe" est� em execu��o
-	if (!vm::process_exists(get_process_name()))
-	{
-		LOG("CS2 process not found - process check failed\n");
-		return 0;
-	}
-
-	game_handle = vm::open_process_ex(get_process_name(), get_client_name());
-	if (!game_handle)
+	#ifdef EC_UM_CLOCK
+    game_handle = client::open_cs2_instance();
+    if (!game_handle) return 0;
+#else
+    game_handle = vm::open_process_ex(get_process_name(), get_client_name());
+#endif
+    
+if (!game_handle)
 	{
 		LOG("CS2 detected, but opening the process or locating client.dll/libclient.so failed\n");
 		return 0;
@@ -196,7 +199,20 @@ static BOOL cs2::initialize(void)
 
 	QWORD client_dll, sdl, inputsystem;
 	JZ(client_dll = vm::get_module(game_handle, get_client_name()), E1);
-	JZ(sdl = vm::get_module(game_handle, get_sdl3_name()), E1);
+	#ifdef EC_UM_CLOCK
+    {
+        client::GameProfile profile{};
+        if (!client::load_cs2_profile(game_handle,
+            vm::get_module(game_handle, get_engine_name()), client_dll, profile)) goto E1;
+        direct::view_matrix = client_dll + profile.matrix_rva;
+        direct::view_angles = client_dll + profile.angles_rva;
+        convars::sensitivity_pointer = client_dll + profile.sensitivity_rva;
+        convars::sensitivity_value_offset = profile.sensitivity_value_offset;
+        convars::attribute_manager_offset = profile.attribute_manager_offset;
+    }
+#endif
+    
+JZ(sdl = vm::get_module(game_handle, get_sdl3_name()), E1);
 	JZ(inputsystem = vm::get_module(game_handle, get_inputsystem_name()), E1);
 	interfaces::resource = get_interface(vm::get_module(game_handle, get_engine_name()), "GameResourceServiceClientV0");
 	if (interfaces::resource == 0)
@@ -261,13 +277,16 @@ static BOOL cs2::initialize(void)
 		direct::local_player    = vm::get_relative_address(game_handle, direct::local_player, 3, 8);
 	}
 
-	JZ(direct::view_angles  = get_interface(client_dll, "Source2Client0"), E1);
+	#ifndef EC_UM_CLOCK
+JZ(direct::view_angles  = get_interface(client_dll, "Source2Client0"), E1);
 	direct::view_angles     = vm::get_relative_address(game_handle, get_interface_function(direct::view_angles, 16), 3, 7);
 	JZ(direct::view_angles  = vm::read_i64(game_handle, direct::view_angles), E1);
 	direct::view_angles     += get_viewangles_off();
 
 
-	if (vm::get_target_os() == VmOs::Linux)
+	#endif
+
+if (vm::get_target_os() == VmOs::Linux)
 	{
 		//
 		// viewmatrix: 48 8d 05 ? ? ? ? 4c 8d 05 ? ? ? ? 48 8d 0d
@@ -277,6 +296,7 @@ static BOOL cs2::initialize(void)
 	}
 	else
 	{
+        #ifndef EC_UM_CLOCK
         // Windows CS2 build 14196. The older broad pattern can resolve unrelated data.
         const QWORD engine = vm::get_module(game_handle, get_engine_name());
         if (!engine || vm::read_i32(game_handle, engine + 0x6BA028) != 14196)
@@ -287,6 +307,9 @@ static BOOL cs2::initialize(void)
         direct::view_matrix = client_dll + 0x2570250;
         direct::view_angles = client_dll + 0x2581098;
         convars::sensitivity_pointer = client_dll + 0x2567C48;
+        convars::sensitivity_value_offset = 0x58;
+        convars::attribute_manager_offset = 0x1290;
+#endif
     }
 
     if (!direct::view_matrix)
@@ -780,7 +803,7 @@ float cs2::mouse::get_sensitivity(void)
 {
 	if (convars::sensitivity_pointer) {
         const QWORD sensitivity = vm::read_i64(game_handle, convars::sensitivity_pointer);
-        return sensitivity ? vm::read_float(game_handle, sensitivity + 0x58) : 0.0f;
+        return sensitivity ? vm::read_float(game_handle, sensitivity + convars::sensitivity_value_offset) : 0.0f;
     }
     return vm::read_float(game_handle, convars::sensitivity + 0x40);
 }
@@ -915,7 +938,7 @@ cs2::WEAPON_CLASS cs2::player::get_weapon_class(QWORD player)
 	//
 	// C_EconEntity::m_AttributeManager + C_AttributeContainer::m_Item + C_EconItemView::m_iItemDefinitionIndex
 	//
-	const QWORD attribute_manager = convars::sensitivity_pointer ? 0x1290 : 0x1140;
+	const QWORD attribute_manager = convars::attribute_manager_offset ? convars::attribute_manager_offset : 0x1140;
     WORD weapon_index = 0;
     if (!vm::read(game_handle, weapon + attribute_manager + 0x50 + 0x1BA,
                   &weapon_index, sizeof(weapon_index)) || !weapon_index)

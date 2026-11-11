@@ -39,6 +39,14 @@ Em **Aim Regions**, configure as chances de seleção de **Head**, **Body** e **
 
 Cada escolha aponta para um *bone* (um ponto do esqueleto do modelo). A *hitbox* é o volume usado pelo jogo para registrar um acerto. A distribuição real dos acertos também depende da posição e do movimento dos alvos.
 
+## Compatibilidade com builds do CS2
+
+Em **Game Compatibility**, o modo **Automatic** usa a única instância do CS2 ou um caminho preferido que corresponda a uma única instância aberta. Se houver mais de uma opção, escolha pelo PID e caminho. O caminho escolhido fica salvo em `um-settings.ini`.
+
+Na primeira execução, o programa cria `um-profiles.ini` ao lado de `um.exe`. O painel mostra o PID, a build interna e se o perfil foi carregado. O botão **Reload** atualiza a lista e relê o arquivo. Um perfil ausente ou inválido impede a inicialização.
+
+Para uma build nova, adicione uma seção `[Build.<número interno>]` com os campos do exemplo gerado. Use somente valores verificados para essa build. Se o local do número da build no módulo do jogo mudar, atualize também `EngineBuildRva` em `[Detection]`. Mudanças na estrutura das convars, das entidades ou dos campos do jogo podem exigir ajustes no código.
+
 ## Verificação e diagnóstico
 
 A compilação **Release x64** e os testes com memória simulada foram executados no Windows. A aparência do painel e o comportamento de mira e trigger devem ser conferidos na partida local.

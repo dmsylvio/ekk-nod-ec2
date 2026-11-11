@@ -36,6 +36,22 @@
 #endif
 
 
+#ifdef EC_UM_CLOCK
+namespace client
+{
+    struct GameProfile
+    {
+        DWORD matrix_rva;
+        DWORD angles_rva;
+        DWORD sensitivity_rva;
+        DWORD sensitivity_value_offset;
+        DWORD attribute_manager_offset;
+    };
+    vm_handle open_cs2_instance();
+    bool load_cs2_profile(vm_handle process, QWORD engine, QWORD client_module, GameProfile& profile);
+}
+#endif
+
 namespace cs2
 {
 	extern vm_handle game_handle ;
@@ -135,3 +151,4 @@ namespace cs2
 }
 
 #endif /* cs2.h */
+
