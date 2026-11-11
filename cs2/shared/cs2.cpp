@@ -1125,8 +1125,25 @@ static QWORD cs2::get_interface(QWORD base, PCSTR name)
 
 	if (vm::get_target_os() == VmOs::Linux)
 	{
-		export_address = vm::get_relative_address(game_handle, export_address, 1, 5);
+		unsigned char opcode = 0;
+		if (!vm::read(game_handle, export_address, &opcode, sizeof(opcode)))
+			return 0;
+		if (opcode == 0xe9)
+		{
+			export_address = vm::get_relative_address(game_handle, export_address, 1, 5);
+			if (!export_address)
+				return 0;
+		}
+		if (export_address > ~(QWORD)0 - 0x17)
+			return 0;
 		export_address += 0x10;
+		unsigned char instruction[3]{};
+		if (!vm::read(game_handle, export_address, instruction, sizeof(instruction)) ||
+		    instruction[0] != 0x48 || instruction[1] != 0x8b || instruction[2] != 0x1d)
+		{
+			LOG("interface [%s]: unsupported Linux registry instruction\n", name);
+			return 0;
+		}
 	}
 	
 	QWORD registry_address = vm::get_relative_address(game_handle, export_address, 3, 7);
