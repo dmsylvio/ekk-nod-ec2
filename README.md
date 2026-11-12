@@ -41,6 +41,8 @@ O painel **CS2 Controls** abre junto com o executável. Use **F8** para mostrar 
 
 Em **Aim Regions**, configure as chances de seleção de **Head**, **Body** e **Arms / Legs**. Os valores iniciais são **40%**, **50%** e **10%**. A soma deve ser 100%. Clique em **Apply regions** para salvar.
 
+Use **Aim strength** para ajustar a força da mira de 0 a 100%. O valor é salvo em `um-settings.ini`. Com 0%, o Aim fica desligado.
+
 Cada escolha aponta para um *bone* (um ponto do esqueleto do modelo). A *hitbox* é o volume usado pelo jogo para registrar um acerto. A distribuição real dos acertos também depende da posição e do movimento dos alvos.
 
 ## Compatibilidade com builds do CS2

@@ -8,6 +8,8 @@
 #include <SDL3/SDL.h>
 #pragma comment(lib, "SDL3.lib")
 #include <tlhelp32.h>
+#include <commctrl.h>
+#pragma comment(lib, "Comctl32.lib")
 
 static SDL_Surface* sdl_surface;
 
@@ -24,6 +26,9 @@ namespace
     constexpr const wchar_t* setting_names[] = {L"Aim", L"Trigger", L"Overlay"};
     int bindings[] = {VK_XBUTTON2, VK_XBUTTON1, VK_F7};
     wchar_t settings_path[MAX_PATH]{};
+    constexpr int aim_strength_slider_id = 213;
+    constexpr int aim_strength_label_id = 214;
+    int aim_strength = 50;
     int region_weights[] = {40, 50, 10};
     constexpr const wchar_t* region_names[] = {L"Head", L"Body", L"Arms / Legs"};
     constexpr const wchar_t* weight_names[] = {L"Head", L"Body", L"Limbs"};
@@ -186,8 +191,8 @@ namespace
         HPEN border = CreatePen(PS_SOLID, 1, RGB(203, 213, 228));
         HGDIOBJ old_pen = SelectObject(dc, border);
         RoundRect(dc, 12, 86, client.right - 12, 235, 14, 14);
-        RoundRect(dc, 12, 246, client.right - 12, 410, 14, 14);
-        RoundRect(dc, 12, 421, client.right - 12, 549, 14, 14);
+        RoundRect(dc, 12, 246, client.right - 12, 455, 14, 14);
+        RoundRect(dc, 12, 466, client.right - 12, 594, 14, 14);
         SelectObject(dc, old_pen);
         SelectObject(dc, old_brush);
         DeleteObject(border);
@@ -197,6 +202,13 @@ namespace
     bool key_down(int key)
     {
         return (GetAsyncKeyState(key) & 0x8000) != 0;
+    }
+
+    void update_aim_strength_label(HWND panel)
+    {
+        wchar_t label[32]{};
+        swprintf_s(label, L"Aim strength: %d%%", aim_strength);
+        SetDlgItemTextW(panel, aim_strength_label_id, label);
     }
 
     LRESULT CALLBACK panel_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
@@ -215,6 +227,19 @@ namespace
             SetBkColor((HDC)wparam, RGB(255, 255, 255));
             SetTextColor((HDC)wparam, id == 211 || footer ? panel_muted : panel_text);
             return (LRESULT)GetStockObject(footer ? NULL_BRUSH : WHITE_BRUSH);
+        }
+        if (msg == WM_HSCROLL && lparam &&
+            GetDlgCtrlID(reinterpret_cast<HWND>(lparam)) == aim_strength_slider_id)
+        {
+            aim_strength = static_cast<int>(SendMessageW(reinterpret_cast<HWND>(lparam), TBM_GETPOS, 0, 0));
+            update_aim_strength_label(hwnd);
+            if (LOWORD(wparam) != TB_THUMBTRACK && settings_path[0])
+            {
+                wchar_t value[8]{};
+                swprintf_s(value, L"%d", aim_strength);
+                WritePrivateProfileStringW(L"Controls", L"AimStrength", value, settings_path);
+            }
+            return 0;
         }
         if (msg == WM_CLOSE || (msg == WM_HOTKEY && wparam == 1))
         {
@@ -297,6 +322,8 @@ namespace
         if (!separator || wcscpy_s(separator + 1, MAX_PATH - (separator + 1 - settings_path), L"um-settings.ini"))
             settings_path[0] = 0;
 
+        const INITCOMMONCONTROLSEX common_controls{sizeof(INITCOMMONCONTROLSEX), ICC_BAR_CLASSES};
+        InitCommonControlsEx(&common_controls);
         const HINSTANCE instance = GetModuleHandleW(nullptr);
         WNDCLASSW wc{};
         wc.lpfnWndProc = panel_proc;
@@ -308,7 +335,7 @@ namespace
 
         HWND panel = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, wc.lpszClassName,
             L"CS2 Controls", WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT,
-            426, 625, nullptr, nullptr, instance, nullptr);
+            426, 670, nullptr, nullptr, instance, nullptr);
         if (!panel) return nullptr;
         panel_heading_font = CreateFontW(-23, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE,
             FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
@@ -369,22 +396,31 @@ namespace
         }
         add_control(L"BUTTON", L"Apply regions", WS_TABSTOP | BS_PUSHBUTTON, 26, 351, 122, 29, 210);
         add_control(L"STATIC", L"Total must equal 100%.", 0, 161, 358, 218, 23, 211);
+        const UINT saved_strength = settings_path[0] ?
+            GetPrivateProfileIntW(L"Controls", L"AimStrength", 50, settings_path) : 50;
+        aim_strength = saved_strength <= 100 ? static_cast<int>(saved_strength) : 50;
+        add_control(L"STATIC", L"", 0, 26, 386, 350, 20, aim_strength_label_id);
+        const HWND strength_slider = add_control(TRACKBAR_CLASSW, L"Aim strength",
+            WS_TABSTOP | TBS_NOTICKS, 26, 409, 350, 32, aim_strength_slider_id);
+        SendMessageW(strength_slider, TBM_SETRANGE, TRUE, MAKELPARAM(0, 100));
+        SendMessageW(strength_slider, TBM_SETPOS, TRUE, aim_strength);
+        update_aim_strength_label(panel);
         initialize_profile_file();
         wchar_t path[MAX_PATH]{};
         if (settings_path[0])
             GetPrivateProfileStringW(L"Compatibility", L"PreferredPath", L"", path, _countof(path), settings_path);
         preferred_path = path;
-        add_control(L"STATIC", L"GAME COMPATIBILITY", 0, 26, 434, 350, 22, 0);
+        add_control(L"STATIC", L"GAME COMPATIBILITY", 0, 26, 479, 350, 22, 0);
         game_combo = add_control(L"COMBOBOX", nullptr,
-            WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWNLIST, 26, 460, 258, 240, 220);
+            WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWNLIST, 26, 505, 258, 240, 220);
         SendMessageW(game_combo, CB_ADDSTRING, 0, (LPARAM)L"Automatic");
         SendMessageW(game_combo, CB_SETCURSEL, 0, 0);
         SendMessageW(game_combo, CB_SETDROPPEDWIDTH, 640, 0);
-        add_control(L"BUTTON", L"Reload", WS_TABSTOP | BS_PUSHBUTTON, 297, 459, 80, 27, 221);
-        game_status = add_control(L"STATIC", L"Waiting for CS2...", 0, 26, 499, 353, 36, 222);
+        add_control(L"BUTTON", L"Reload", WS_TABSTOP | BS_PUSHBUTTON, 297, 504, 80, 27, 221);
+        game_status = add_control(L"STATIC", L"Waiting for CS2...", 0, 26, 544, 353, 36, 222);
         refresh_instances();
         HWND hint = CreateWindowW(L"STATIC", L"F8 opens or closes this panel.",
-            WS_CHILD | WS_VISIBLE, 26, 560, 350, 23, panel, (HMENU)(INT_PTR)212, instance, nullptr);
+            WS_CHILD | WS_VISIBLE, 26, 605, 350, 23, panel, (HMENU)(INT_PTR)212, instance, nullptr);
         SendMessageW(hint, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
         if (!RegisterHotKey(panel, 1, MOD_NOREPEAT, VK_F8))
             printf("F8 unavailable. Controls panel opened at startup.\n");
@@ -510,7 +546,8 @@ namespace client
         return limbs[std::uniform_int_distribution<int>(0, 3)(generator)];
     }
 
-    bool aim_pressed() { return game_focused && key_down(bindings[0]); }
+    float aim_smoothing() { return 8.0f - 7.0f * aim_strength / 100.0f; }
+    bool aim_pressed() { return game_focused && aim_strength > 0 && key_down(bindings[0]); }
     bool trigger_pressed() { return game_focused && key_down(bindings[1]); }
     bool overlay_enabled() { return overlay_visible; }
 

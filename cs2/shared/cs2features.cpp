@@ -295,8 +295,6 @@ void cs2::features::run(void)
     update_settings();
     #if defined(EC_UM_CLOCK) || defined(__linux__)
     config::visuals_enabled = client::overlay_enabled();
-#endif
-#ifdef __linux__
     config::aimbot_smooth = client::aim_smoothing();
 #endif
     const BOOL ffa = cs2::gamemode::is_ffa();
