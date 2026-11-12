@@ -5,7 +5,7 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 
 
-DEFAULTS = (50, 40, 50, 10, 1, 1, 1, 5, 4)
+DEFAULTS = (50, 40, 50, 10, 1, 1, 1, 5, 4, 100)
 
 
 def config_path():
@@ -16,9 +16,10 @@ def config_path():
 
 
 def valid(values):
-    return (len(values) == 9 and all(0 <= value <= 100 for value in values[:4])
+    return (len(values) == 10 and all(0 <= value <= 100 for value in values[:4])
             and sum(values[1:4]) == 100 and all(value in (0, 1) for value in values[4:7])
-            and all(value in (1, 4, 5) for value in values[7:9]))
+            and all(value in (1, 4, 5) for value in values[7:9])
+            and 0 <= values[9] <= 100)
 
 
 def load_settings(path):
@@ -26,8 +27,8 @@ def load_settings(path):
         values = tuple(map(int, path.read_text().split()))
     except (OSError, ValueError):
         return DEFAULTS
-    if len(values) == 4:
-        values += DEFAULTS[4:]
+    if len(values) in (4, 9):
+        values += DEFAULTS[len(values):]
     return values if valid(values) else DEFAULTS
 
 
@@ -157,6 +158,14 @@ def main():
         slider.update_property([Gtk.AccessibleProperty.LABEL], ["Força da mira"])
         content.append(slider)
 
+        recoil_label = Gtk.Label(label="Compensação de recoil no Aim (%)", xalign=0)
+        content.append(recoil_label)
+        recoil_slider = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 100, 1)
+        recoil_slider.set_draw_value(True)
+        recoil_slider.set_value(values[9])
+        recoil_slider.update_property([Gtk.AccessibleProperty.LABEL], ["Compensação de recoil no Aim"])
+        content.append(recoil_slider)
+
         fields = []
         for label, value in zip(("Cabeça (%)", "Tronco (%)", "Braços e pernas (%)"), regions):
             row = Gtk.Box(spacing=12)
@@ -184,7 +193,8 @@ def main():
         def apply(_):
             values = (int(slider.get_value()), *(field.get_value_as_int() for field in fields),
                       *(int(toggle.get_active()) for toggle in toggles),
-                      *(choices[button.get_selected()] for button in buttons))
+                      *(choices[button.get_selected()] for button in buttons),
+                      int(recoil_slider.get_value()))
             try:
                 save_settings(path, values)
             except (OSError, ValueError) as error:
@@ -195,6 +205,7 @@ def main():
         for field in fields:
             field.connect("value-changed", update_total)
         slider.connect("value-changed", update_total)
+        recoil_slider.connect("value-changed", update_total)
         save.connect("clicked", apply)
         update_total()
         window.present()

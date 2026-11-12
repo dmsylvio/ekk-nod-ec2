@@ -88,6 +88,7 @@ namespace client
 	}
 	bool overlay_enabled() { return runtime_settings::current.wall != 0; }
 	float aim_smoothing() { return 8.0f - 7.0f * runtime_settings::current.strength / 100.0f; }
+	float recoil_scale() { return runtime_settings::current.recoil_strength / 100.0f; }
 	int choose_aim_bone()
 	{
 		static std::mt19937 generator(std::random_device{}());

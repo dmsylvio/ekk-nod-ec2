@@ -26,6 +26,7 @@ namespace client
 {
 #ifdef __linux__
     bool get_overlay_size(int* width, int* height);
+    float recoil_scale();
 #endif
 	#if defined(EC_UM_CLOCK) || defined(__linux__)
     float aim_smoothing();

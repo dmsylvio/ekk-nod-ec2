@@ -15,6 +15,7 @@ struct Values
 	int trigger = 1;
 	int aim_button = 5;
 	int trigger_button = 4;
+	int recoil_strength = 100;
 };
 
 inline Values current;
@@ -32,6 +33,7 @@ inline std::filesystem::path directory()
 inline bool valid(const Values& value)
 {
 	if (value.strength < 0 || value.strength > 100 ||
+	    value.recoil_strength < 0 || value.recoil_strength > 100 ||
 	    value.regions[0] < 0 || value.regions[0] > 100 ||
 	    value.regions[1] < 0 || value.regions[1] > 100 ||
 	    value.regions[2] < 0 || value.regions[2] > 100 ||
@@ -52,6 +54,10 @@ inline void reload()
 	input >> std::ws;
 	if (!input.eof() && !(input >> next.wall >> next.aim >> next.trigger >> next.aim_button >> next.trigger_button))
 		return;
-	if (valid(next)) current = next;
+	input >> std::ws;
+	if (!input.eof() && !(input >> next.recoil_strength))
+		return;
+	input >> std::ws;
+	if (input.eof() && valid(next)) current = next;
 }
 }

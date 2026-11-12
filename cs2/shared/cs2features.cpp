@@ -75,9 +75,17 @@ namespace
     bool project_enemy_box(QWORD target_player, ScreenBox& box, vec3* spray_point = nullptr)
     {
         cs2::WINDOW_INFO window{};
+#ifdef __linux__
+        int width = 0, height = 0;
+        if (!client::get_overlay_size(&width, &height))
+            return false;
+        window.w = static_cast<float>(width);
+        window.h = static_cast<float>(height);
+#else
         const QWORD handle = cs2::sdl::get_window();
         if (!handle || !cs2::sdl::get_window_info(handle, &window))
             return false;
+#endif
     vec3 origin = cs2::player::get_origin(target_player);
 	vec3 top_origin = origin;
 	top_origin.z += 75.0f;
@@ -401,6 +409,13 @@ void cs2::features::run(void)
 	
 	DWORD num_shots   = cs2::player::get_shots_fired(local_player);
 	vec2  aim_punch   = cs2::player::get_vec_punch(local_player);
+#ifdef __linux__
+	const float recoil_scale = client::recoil_scale();
+	aim_punch.x *= recoil_scale;
+	aim_punch.y *= recoil_scale;
+#endif
+	if (!math::finite(aim_punch.x) || !math::finite(aim_punch.y))
+		aim_punch = {};
 	float sensitivity = cs2::mouse::get_sensitivity() * cs2::player::get_fov_multipler(local_player);
 
 
@@ -409,6 +424,21 @@ void cs2::features::run(void)
 		standalone_rcs(num_shots, aim_punch, sensitivity);
 	}
 	
+#ifdef __linux__
+	const QWORD crosshair_target = b_aimbot_button ? cs2::player::get_crosshair_target(local_player) : 0;
+	if (!crosshair_target || crosshair_target == local_player ||
+	    (!ffa && cs2::player::get_team_num(crosshair_target) == cs2::player::get_team_num(local_player)) ||
+	    !cs2::player::is_valid(crosshair_target, cs2::player::get_node(crosshair_target)))
+	{
+		aimbot_target = 0;
+		aimbot_bone = 0;
+		aimbot_active = 0;
+		return;
+	}
+	if (aimbot_target != crosshair_target)
+		aimbot_bone = 0;
+	aimbot_target = crosshair_target;
+#else
 	if (!b_aimbot_button)
 	{
 		//
@@ -446,6 +476,7 @@ void cs2::features::run(void)
 		}
 	}
 
+#endif
 
 	aimbot_active = 0;
 
@@ -615,6 +646,15 @@ if (aimbot_fov > config::aimbot_fov)
 	DWORD current_ms = cs2::engine::get_current_ms();
 	if (current_ms - aimbot_ms > ms)
 	{
+#ifdef __linux__
+		if (cs2::player::get_crosshair_target(local_player) != aimbot_target)
+		{
+			aimbot_target = 0;
+			aimbot_bone = 0;
+			aimbot_active = 0;
+			return;
+		}
+#endif
 		aimbot_ms = current_ms;
 		client::mouse_move((int)smooth_x, (int)smooth_y);
 	}
