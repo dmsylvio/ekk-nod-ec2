@@ -51,7 +51,7 @@ Em **Game Compatibility**, o modo **Automatic** usa a única instância do CS2 o
 
 Na primeira execução, o programa cria `um-profiles.ini` ao lado de `um.exe`. O painel mostra o PID, a build interna e se o perfil foi carregado. O botão **Reload** atualiza a lista e relê o arquivo. Um perfil ausente ou inválido impede a inicialização.
 
-Para uma build nova, adicione uma seção `[Build.<número interno>]` com os campos do exemplo gerado. Use somente valores verificados para essa build. Se o local do número da build no módulo do jogo mudar, atualize também `EngineBuildRva` em `[Detection]`. Mudanças na estrutura das convars, das entidades ou dos campos do jogo podem exigir ajustes no código.
+Para uma versão nova, use a seção `[Patch.<PatchVersion>]` com o valor de `PatchVersion` em `game/csgo/steam.inf` e os campos do exemplo gerado. Os perfis existentes em `[Build.<número interno>]` continuam disponíveis. Use somente valores verificados para essa build. Se o local do número da build no módulo do jogo mudar, atualize também `EngineBuildRva` em `[Detection]`. Mudanças na estrutura das convars, das entidades ou dos campos do jogo podem exigir ajustes no código.
 
 ## Verificação e diagnóstico
 

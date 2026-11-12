@@ -1,6 +1,8 @@
 #include <string>
 #include <vector>
 #include <random>
+#include <filesystem>
+#include <fstream>
 #include "../../cs2/shared/cs2game.h"
 #include "../../csgo/shared/csgogame.h"
 #include "../../apex/shared/apexgame.h"
@@ -64,6 +66,40 @@ namespace
         DWORD length = _countof(path);
         return QueryFullProcessImageNameW(process, 0, path, &length) ?
             std::wstring(path, length) : std::wstring{};
+    }
+
+    std::wstring installed_patch(HANDLE process)
+    {
+        const auto image = process_path(process);
+        if (image.empty()) return {};
+        const auto game = std::filesystem::path(image).parent_path().parent_path().parent_path();
+        std::ifstream manifest(game / L"csgo" / L"steam.inf");
+        for (std::string line; std::getline(manifest, line);)
+        {
+            constexpr char key[] = "PatchVersion=";
+            if (line.compare(0, sizeof(key) - 1, key) != 0) continue;
+            std::string version = line.substr(sizeof(key) - 1);
+            if (!version.empty() && version.back() == '\r') version.pop_back();
+            if (version.empty() || version.size() > 20) return {};
+            unsigned components = 1;
+            bool needs_digit = true;
+            for (const char ch : version)
+            {
+                if (ch >= '0' && ch <= '9')
+                    needs_digit = false;
+                else if (ch == '.' && !needs_digit)
+                {
+                    ++components;
+                    needs_digit = true;
+                }
+                else
+                    return {};
+            }
+            if (!needs_digit && components == 4)
+                return std::wstring(version.begin(), version.end());
+            return {};
+        }
+        return {};
     }
 
     void refresh_instances()
@@ -497,40 +533,61 @@ namespace client
 
     bool load_cs2_profile(vm_handle process, QWORD engine, QWORD client_module, GameProfile& profile)
     {
-        DWORD build_rva = 0x6BA028;
-        read_profile_number(L"Detection", L"EngineBuildRva", build_rva);
-        DWORD build = 0;
-        if (!module_contains(process, engine, build_rva, sizeof(build)) ||
-            !vm::read(process, engine + build_rva, &build, sizeof(build)) ||
-            build < 1000 || build > 999999)
+        if (!engine || !client_module)
         {
-            SetWindowTextW(game_status, L"Build could not be detected. Check EngineBuildRva.");
+            SetWindowTextW(game_status, L"CS2 process found. Waiting for game modules...");
             return false;
         }
 
-        wchar_t section[32]{};
-        swprintf_s(section, L"Build.%u", build);
+        const std::wstring patch = installed_patch(process);
+        const std::wstring patch_section = L"Patch." + patch;
+        wchar_t first_entry[4]{};
+        const bool has_patch_profile = !patch.empty() && profiles_path[0] &&
+            GetPrivateProfileStringW(patch_section.c_str(), nullptr, L"", first_entry,
+                _countof(first_entry), profiles_path);
+
+        DWORD build = 0;
+        std::wstring section = patch_section;
+        if (!has_patch_profile)
+        {
+            DWORD build_rva = 0x6BA028;
+            read_profile_number(L"Detection", L"EngineBuildRva", build_rva);
+            const bool detected = module_contains(process, engine, build_rva, sizeof(build)) &&
+                vm::read(process, engine + build_rva, &build, sizeof(build)) &&
+                build >= 1000 && build <= 999999;
+            if (!detected)
+            {
+                const std::wstring status = patch.empty() ?
+                    L"CS2 process found. Could not read the installed version." :
+                    L"CS2 " + patch + L" detected. No compatible profile.\nAdd [" +
+                    patch_section + L"] to um-profiles.ini.";
+                SetWindowTextW(game_status, status.c_str());
+                return false;
+            }
+            section = L"Build." + std::to_wstring(build);
+        }
+
         const wchar_t* names[] = {L"ViewMatrixRva", L"ViewAnglesRva", L"SensitivityRva",
             L"SensitivityValueOffset", L"AttributeManagerOffset"};
         DWORD* values[] = {&profile.matrix_rva, &profile.angles_rva, &profile.sensitivity_rva,
             &profile.sensitivity_value_offset, &profile.attribute_manager_offset};
-        wchar_t first_entry[4]{};
         const bool has_section = profiles_path[0] &&
-            GetPrivateProfileStringW(section, nullptr, L"", first_entry, _countof(first_entry), profiles_path);
+            GetPrivateProfileStringW(section.c_str(), nullptr, L"", first_entry, _countof(first_entry), profiles_path);
         bool valid = true;
         if (!has_section && build == 14196)
             profile = {0x2570250, 0x2581098, 0x2567C48, 0x58, 0x1290};
         else
             for (int i = 0; i < _countof(names); ++i)
-                valid = read_profile_number(section, names[i], *values[i]) && valid;
+                valid = read_profile_number(section.c_str(), names[i], *values[i]) && valid;
 
         valid = valid && module_contains(process, client_module, profile.matrix_rva, 64) &&
             module_contains(process, client_module, profile.angles_rva, 8) &&
             module_contains(process, client_module, profile.sensitivity_rva, 8) &&
             profile.sensitivity_value_offset < 0x1000 && profile.attribute_manager_offset < 0x10000;
         wchar_t status[96]{};
-        swprintf_s(status, valid ? L"PID %u  |  Build %u  |  Profile loaded" :
-            L"PID %u  |  Build %u  |  Missing or invalid profile", GetProcessId(process), build);
+        const std::wstring version = patch.empty() ? L"Build " + std::to_wstring(build) : L"CS2 " + patch;
+        swprintf_s(status, L"PID %u  |  %ls\n%ls", GetProcessId(process), version.c_str(),
+            valid ? L"Profile loaded" : L"Missing or invalid profile");
         SetWindowTextW(game_status, status);
         return valid;
     }
