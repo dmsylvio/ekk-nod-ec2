@@ -68,6 +68,83 @@ namespace features
 }
 }
 
+namespace
+{
+    struct ScreenBox { int x, y, w, h; };
+
+    bool project_enemy_box(QWORD target_player, ScreenBox& box, vec3* spray_point = nullptr)
+    {
+        cs2::WINDOW_INFO window{};
+        const QWORD handle = cs2::sdl::get_window();
+        if (!handle || !cs2::sdl::get_window_info(handle, &window))
+            return false;
+    vec3 origin = cs2::player::get_origin(target_player);
+	vec3 top_origin = origin;
+	top_origin.z += 75.0f;
+
+
+	vec3 screen_bottom, screen_top;
+	view_matrix_t view_matrix = cs2::engine::get_viewmatrix();
+
+	vec2 screen_size{};
+	screen_size.x = (float)window.w;
+	screen_size.y = (float)window.h;
+
+
+	if (!math::world_to_screen(screen_size, origin, screen_bottom, view_matrix) || !math::world_to_screen(screen_size, top_origin, screen_top, view_matrix))
+	{
+		return false;
+	}
+
+
+	if (!math::finite(window.x) || !math::finite(window.y) ||
+	    window.w <= 0 || window.h <= 0 || window.w > 100000 || window.h > 100000 ||
+	    window.x < -100000 || window.x > 100000 || window.y < -100000 || window.y > 100000 ||
+	    screen_top.x < 0 || screen_top.x > window.w || screen_bottom.x < 0 || screen_bottom.x > window.w ||
+	    screen_top.y < 0 || screen_bottom.y > window.h || screen_bottom.y <= screen_top.y) return false;
+
+    int box_height = (int)(screen_bottom.y - screen_top.y);
+	int box_width = box_height / 2;
+
+	int x = (int)window.x + (int)(screen_top.x - box_width / 2);
+	int y = (int)window.y + (int)(screen_top.y);
+
+	if (x > (int)(window.x + screen_size.x - (box_width)))
+	{
+		return false;
+	}
+	else if (x < window.x)
+	{
+		return false;
+	}
+
+	if (y > (int)(screen_size.y + window.y - (box_height)))
+	{
+		return false;
+	}
+	else if (y < window.y)
+	{
+		return false;
+	}
+
+        if (box_width < 5) return false;
+        if (spray_point)
+        {
+            vec3 center = origin;
+            center.z += 37.5f;
+            vec3 projected{};
+            const float left = static_cast<float>(x - static_cast<int>(window.x));
+            const float top = static_cast<float>(y - static_cast<int>(window.y));
+            if (!math::world_to_screen(screen_size, center, projected, view_matrix) ||
+                projected.x <= left || projected.x >= left + box_width ||
+                projected.y <= top || projected.y >= top + box_height)
+                return false;
+            *spray_point = center;
+        }
+        box = {x, y, box_width, box_height};
+        return true;
+    }
+}
 namespace config
 {
 	static BOOL  rcs;
@@ -405,9 +482,19 @@ void cs2::features::run(void)
 	float aimbot_fov = 360.0f;
 
 	#if defined(EC_UM_CLOCK) || defined(__linux__)
-    if (!aimbot_bone) aimbot_bone = client::choose_aim_bone();
     vec3 selected_position{};
-    if (!cs2::node::get_bone_position(node, aimbot_bone, &selected_position)) return;
+#ifdef EC_UM_CLOCK
+    if (num_shots > 0)
+    {
+        ScreenBox box{};
+        if (!project_enemy_box(aimbot_target, box, &selected_position)) return;
+    }
+    else
+#endif
+    {
+        if (!aimbot_bone) aimbot_bone = client::choose_aim_bone();
+        if (!cs2::node::get_bone_position(node, aimbot_bone, &selected_position)) return;
+    }
     aimbot_angle = get_target_angle(local_player, selected_position, num_shots, aim_punch);
     aimbot_fov = math::get_fov(view_angle, aimbot_angle);
 #else
@@ -667,169 +754,14 @@ static void cs2::features::standalone_rcs(DWORD num_shots, vec2 vec_punch, float
 
 static void cs2::features::esp(QWORD local_player, QWORD target_player, vec3 head)
 {
-    cs2::WINDOW_INFO window{};
-#ifdef __linux__
-	int width = 0, height = 0;
-	if (!client::get_overlay_size(&width, &height))
-		return;
-	window.w = static_cast<float>(width);
-	window.h = static_cast<float>(height);
-#else
-	QWORD sdl_window = cs2::sdl::get_window();
-	if (!sdl_window || !cs2::sdl::get_window_info(sdl_window, &window))
-		return;
-#endif
-
-	/*
-	float view = cs2::player::get_vec_view(local_player) - 10.0f;
-
-	
-	vec3 bottom;
-	bottom.x = head.x;
-	bottom.y = head.y;
-	bottom.z = head.z - view;
-
-	vec3 top;
-	top.x = bottom.x;
-	top.y = bottom.y;
-	top.z = bottom.z + view;
-	
-
-	view_matrix_t view_matrix = cs2::engine::get_viewmatrix();
-
-
-	vec2 screen_size;
-	screen_size.x = window.w;
-	screen_size.y = window.h;
-
-
-	vec3 screen_bottom, screen_top;
-	if (!math::world_to_screen(screen_size, bottom, screen_bottom, view_matrix) || !math::world_to_screen(screen_size, top, screen_top, view_matrix))
-	{
-		return;
-	}
-
-	if (!math::finite(window.x) || !math::finite(window.y) ||
-	    window.w <= 0 || window.h <= 0 || window.w > 100000 || window.h > 100000 ||
-	    window.x < -100000 || window.x > 100000 || window.y < -100000 || window.y > 100000 ||
-	    screen_top.x < 0 || screen_top.x > window.w || screen_bottom.x < 0 || screen_bottom.x > window.w ||
-	    screen_top.y < 0 || screen_bottom.y > window.h || screen_bottom.y <= screen_top.y) return;
-
-	float height  = (screen_bottom.y - screen_top.y) / 8.f;
-	float width   = (screen_bottom.y - screen_top.y) / 14.f;
-
-	int x = (int)((screen_top.x - (width  / 2.0f)) + window.x);
-	int y = (int)((screen_top.y - (height / 2.0f)) + window.y);
-	int w = (int)width;
-	int h = (int)height;
-	
-	if (x > (int)(window.x + screen_size.x - (w)))
-	{
-		return;
-	}
-	else if (x < window.x)
-	{
-		return;
-	}
-
-	if (y > (int)(screen_size.y + window.y - (h)))
-	{
-		return;
-	}
-	else if (y < window.y)
-	{
-		return;
-	}
-
-	float target_health = ((float)cs2::player::get_health(target_player) / 100.0f) * 255.0f;
-	if (target_health > 255.0f) target_health = 255.0f;
-    float r = 255.0f - target_health;
-	float g = target_health;
-	float b = 0.00f;
-	
-#ifdef __linux__
-	client::DrawFillRect((void *)0, x, y, w, h, (unsigned char)r, (unsigned char)g, (unsigned char)b);
-#else
-	QWORD sdl_window_data = cs2::sdl::get_window_data(sdl_window);
-	if (sdl_window_data == 0)
-		return;
-	QWORD hwnd = cs2::sdl::get_hwnd(sdl_window_data);
-	client::DrawFillRect((void *)hwnd, x, y, w, h, (unsigned char)r, (unsigned char)g, (unsigned char)b);
-#endif
-	*/
-	
-	
-	
-#ifndef __linux__
-	UNREFERENCED_PARAMETER(local_player);
-	UNREFERENCED_PARAMETER(head);
-#endif
-
-    vec3 origin = cs2::player::get_origin(target_player);
-	vec3 top_origin = origin;
-	top_origin.z += 75.0f;
-
-
-	vec3 screen_bottom, screen_top;
-	view_matrix_t view_matrix = cs2::engine::get_viewmatrix();
-
-	vec2 screen_size{};
-	screen_size.x = (float)window.w;
-	screen_size.y = (float)window.h;
-
-
-	if (!math::world_to_screen(screen_size, origin, screen_bottom, view_matrix) || !math::world_to_screen(screen_size, top_origin, screen_top, view_matrix))
-	{
-		return;
-	}
-
-
-	float target_health = ((float)cs2::player::get_health(target_player) / 100.0f) * 255.0f;
-	if (target_health > 255.0f) target_health = 255.0f;
-    float r = 255.0f - target_health;
-	float g = target_health;
-	float b = 0.00f;
-
-
-	if (config::visuals_enabled == 2)
-	{
-		if (aimbot_target == target_player)
-		{
-			g = 144.0f;
-			b = 255.0f;
-		}
-	}
-
-	if (!math::finite(window.x) || !math::finite(window.y) ||
-	    window.w <= 0 || window.h <= 0 || window.w > 100000 || window.h > 100000 ||
-	    window.x < -100000 || window.x > 100000 || window.y < -100000 || window.y > 100000 ||
-	    screen_top.x < 0 || screen_top.x > window.w || screen_bottom.x < 0 || screen_bottom.x > window.w ||
-	    screen_top.y < 0 || screen_bottom.y > window.h || screen_bottom.y <= screen_top.y) return;
-
-    int box_height = (int)(screen_bottom.y - screen_top.y);
-	int box_width = box_height / 2;
-
-	int x = (int)window.x + (int)(screen_top.x - box_width / 2);
-	int y = (int)window.y + (int)(screen_top.y);
-
-	if (x > (int)(window.x + screen_size.x - (box_width)))
-	{
-		return;
-	}
-	else if (x < window.x)
-	{
-		return;
-	}
-
-	if (y > (int)(screen_size.y + window.y - (box_height)))
-	{
-		return;
-	}
-	else if (y < window.y)
-	{
-		return;
-	}
-
-    client::DrawRect(nullptr, x, y, box_width, box_height,
-        (unsigned char)r, (unsigned char)g, (unsigned char)b);
+    (void)local_player;
+    (void)head;
+    ScreenBox box{};
+    if (!project_enemy_box(target_player, box)) return;
+    DWORD health = cs2::player::get_health(target_player);
+    if (health > 100) health = 100;
+    const unsigned char green = static_cast<unsigned char>(health * 255 / 100);
+    const bool highlighted = config::visuals_enabled == 2 && aimbot_target == target_player;
+    client::DrawRect(nullptr, box.x, box.y, box.w, box.h,
+        static_cast<unsigned char>(255 - green), highlighted ? 144 : green, highlighted ? 255 : 0);
 }

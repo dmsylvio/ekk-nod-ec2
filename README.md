@@ -8,12 +8,12 @@ O projeto também serve como base para estudar detecção de trapaças. Os contr
 
 - Windows x64.
 - Visual Studio 2022 com **Desktop development with C++**, toolset **MSVC v143** e Windows SDK.
-- Counter-Strike 2 com a build interna **14196** (Steam build **26445667**). O código verifica a build antes de usar a matriz de projeção. Atualizações do jogo podem exigir ajustes.
+- Counter-Strike 2 **1.41.9.7** (Steam build **26598758**) ou build interna **14196** (Steam build **26445667**). O código verifica a build antes de usar a matriz de projeção. Atualizações do jogo podem exigir ajustes.
 - A `SDL3.dll` incluída em `projects/UM`, ao lado do executável durante a execução.
 
 ## Windows x64
 
-Baixe **ekk-windows-x64** em **Artifacts** de uma execução bem-sucedida do [workflow Windows x64](https://github.com/dmsylvio/ekk-nod-ec2/actions/workflows/windows-x64.yml). Extraia o ZIP e execute `um.exe` mantendo `SDL3.dll` na mesma pasta.
+Baixe **ekk-windows-x64** em **Artifacts** de uma execução bem-sucedida do [workflow Windows x64](https://github.com/dmsylvio/ekk-nod-ec2/actions/workflows/windows-x64.yml). Extraia o ZIP e execute `um.exe` mantendo `SDL3.dll` e `um-profiles.ini` na mesma pasta.
 
 ### Compilar localmente
 
@@ -45,11 +45,13 @@ Use **Aim strength** para ajustar a força da mira de 0 a 100%. O valor é salvo
 
 Cada escolha aponta para um *bone* (um ponto do esqueleto do modelo). A *hitbox* é o volume usado pelo jogo para registrar um acerto. A distribuição real dos acertos também depende da posição e do movimento dos alvos.
 
+Durante o spray no Windows, **Aim** usa um ponto central dentro do retângulo projetado do alvo. Se a projeção falhar, a correção pausa.
+
 ## Compatibilidade com builds do CS2
 
 Em **Game Compatibility**, o modo **Automatic** usa a única instância do CS2 ou um caminho preferido que corresponda a uma única instância aberta. Se houver mais de uma opção, escolha pelo PID e caminho. O caminho escolhido fica salvo em `um-settings.ini`.
 
-Na primeira execução, o programa cria `um-profiles.ini` ao lado de `um.exe`. O painel mostra o PID, a build interna e se o perfil foi carregado. O botão **Reload** atualiza a lista e relê o arquivo. Um perfil ausente ou inválido impede a inicialização.
+Mantenha o [`um-profiles.ini`](projects/UM/um-profiles.ini) ao lado de `um.exe`. O arquivo inclui o perfil para o CS2 **1.41.9.7**. O painel mostra o PID, a build interna e se o perfil foi carregado. O botão **Reload** atualiza a lista e relê o arquivo. Um perfil ausente ou inválido impede a inicialização.
 
 Para uma versão nova, use a seção `[Patch.<PatchVersion>]` com o valor de `PatchVersion` em `game/csgo/steam.inf` e os campos do exemplo gerado. Os perfis existentes em `[Build.<número interno>]` continuam disponíveis. Use somente valores verificados para essa build. Se o local do número da build no módulo do jogo mudar, atualize também `EngineBuildRva` em `[Detection]`. Mudanças na estrutura das convars, das entidades ou dos campos do jogo podem exigir ajustes no código.
 

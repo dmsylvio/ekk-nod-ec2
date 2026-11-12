@@ -33,11 +33,12 @@ jobs:
           if (-not (Test-Path (Join-Path $package 'um.exe') -PathType Leaf)) {
             throw 'The Windows build did not produce um.exe'
           }
-          Copy-Item projects/UM/SDL3.dll -Destination $package
+          Copy-Item projects/UM/SDL3.dll,projects/UM/um-profiles.ini -Destination $package
       - uses: actions/upload-artifact@v4
         with:
           name: ekk-windows-x64
           path: |
             ${{ runner.temp }}/ekk-windows-x64/um.exe
             ${{ runner.temp }}/ekk-windows-x64/SDL3.dll
+            ${{ runner.temp }}/ekk-windows-x64/um-profiles.ini
           if-no-files-found: error
